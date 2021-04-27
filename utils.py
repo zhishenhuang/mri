@@ -120,6 +120,15 @@ def sigmoid_binarize(M,threshold=0.5):
     mask_pred[mask<=threshold] = 0
     return mask_pred
 
+def raw_normalize(M,budget):
+    '''
+    to be applied after sigmoid but before binarize!
+    '''
+    if np.sum(M>0.5) > budget:
+        sampinds  = np.argsort(M)[::-1][0:budget]
+        eraseinds = setdiff1d(np.arange(0,M.shape[0],1),sampinds)
+        M[eraseinds] = 0
+    return M
 
 def mask_prob(img,fix=10,other=30,roll=True):
     fix = int(fix)
