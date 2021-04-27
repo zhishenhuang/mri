@@ -191,7 +191,9 @@ def mask_backward(highmask,xstar,\
         
         fullmask_b = mask_makebinary(fullmask.clone().detach(),threshold=0.5,sigma=False)
         mask_sparsity = torch.sum(fullmask_b).item()/fullmask_b.size()[0]
-        changed_rows = np.abs(fullmask_old-fullmask_b).sum().item()
+        delta_mask   = fullmask_old-fullmask_b
+        added_rows   = torch.sum(delta_mask==-1).item();   reducted_rows= torch.sum(delta_mask==1).item()
+        changed_rows = torch.abs(delta_mask).sum().item()
         cr_per_batch += changed_rows
         if changed_rows == 0:
             rCount += 1
@@ -201,7 +203,7 @@ def mask_backward(highmask,xstar,\
             print('No change in row selections after {} iters, ending iteration~'.format(rCount))
             break
         if verbose and (changed_rows>0): # if there is any changed rows, then it is reported in every iteration
-            print('Iter {}, changed rows: {}'.format(Iter,changed_rows))
+            print('Iter {}, rows added: {}, rows reducted: {}'.format(Iter,added_rows,reducted_rows))
         if verbose and (Iter % print_every == 0): # every print_every iters, print the quality and sparsity of the current mask
             # or we can print only 10 times: max(maxIter//10,1)
             with torch.no_grad(): ## Validation

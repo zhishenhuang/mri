@@ -113,20 +113,14 @@ def shiftsamp(sparsity,imgHeg):
     mask[erasInd] = 0
     return mask,maskInd,erasInd
 
-def sigmoid_binarize(M,threshold=0.5):
-    sigmoid = nn.Sigmoid()
-    mask = sigmoid(M)
-    mask_pred = torch.ones_like(mask)
-    mask_pred[mask<=threshold] = 0
-    return mask_pred
 
-def raw_normalize(M,budget):
+def raw_normalize(M,budget,threshold=0.5):
     '''
     to be applied after sigmoid but before binarize!
     '''
-    if np.sum(M>0.5) > budget:
-        sampinds  = np.argsort(M)[::-1][0:budget]
-        eraseinds = setdiff1d(np.arange(0,M.shape[0],1),sampinds)
+    if torch.sum(M>threshold) > budget:
+        sampinds  = np.argsort(M.detach().numpy())[::-1][0:budget]
+        eraseinds = np.setdiff1d(np.arange(0,M.shape[0],1),sampinds)
         M[eraseinds] = 0
     return M
 
