@@ -85,7 +85,7 @@ class MNet(nn.Module):
     def __init__(self, in_channels=1,imgsize=320,out_size=320,beta=1,poolk=3):
         super(MNet, self).__init__()
         self.in_channels = in_channels
-        self.outchannels = 512
+        
         if isinstance(imgsize,int):
             self.imgHeg = imgsize
             self.imgWid = imgsize
@@ -100,12 +100,13 @@ class MNet(nn.Module):
         self.inc   = DoubleConv(in_channels, 64)
         self.down1 = Down(64, 128,poolk=poolk)
         self.down2 = Down(128, 256,poolk=poolk)
-        self.down3 = Down(256, self.outchannels,poolk=poolk)
+        self.down3 = Down(256, 512,poolk=poolk)
+        self.down4 = Down(512, 1024,poolk=poolk)
         self.outc  = OutConv()
         self.midheg,self.midwid = \
-            outsize(*Down_outsize(*Down_outsize(*Down_outsize(\
-                        *DC_outsize(self.imgHeg,self.imgWid),poolk=poolk),poolk=poolk),poolk=poolk),ker=2,stride=2)
-        self.veclen = self.outchannels * self.midheg * self.midwid
+            outsize(*Down_outsize(*Down_outsize(*Down_outsize(*Down_outsize(\
+                                                                            *DC_outsize(self.imgHeg,self.imgWid),poolk=poolk),poolk=poolk),poolk=poolk),poolk=poolk),ker=2,stride=2)
+        self.veclen = 1024 * self.midheg * self.midwid
         lwid1 = self.veclen - ((self.veclen-self.imgHeg)*4)//11
         lwid2 = self.veclen - ((self.veclen-self.imgHeg)*8)//11
         lwid3 = self.veclen - ((self.veclen-self.imgHeg)*10)//11
@@ -123,7 +124,8 @@ class MNet(nn.Module):
         x2 = self.down1(x1)
         x3 = self.down2(x2)
         x4 = self.down3(x3)
-        M  = self.outc(x4).view(batchsize,-1)
+        x5 = self.down4(x4)
+        M  = self.outc(x5).view(batchsize,-1)
         M  = LeakyReLU(self.fc1(M))
         M  = LeakyReLU(self.fc2(M))
         M  = LeakyReLU(self.fc3(M))

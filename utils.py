@@ -113,6 +113,13 @@ def shiftsamp(sparsity,imgHeg):
     mask[erasInd] = 0
     return mask,maskInd,erasInd
 
+def sigmoid_binarize(M,threshold=0.5):
+    sigmoid = nn.Sigmoid()
+    mask = sigmoid(M)
+    mask_pred = torch.ones_like(mask)
+    mask_pred[mask<=threshold] = 0
+    return mask_pred
+
 
 def mask_prob(img,fix=10,other=30,roll=True):
     fix = int(fix)

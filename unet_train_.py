@@ -97,7 +97,7 @@ def train_net(net,epochs=5,batch_size=5,\
                 testloss = criterion(pred, testfull)
                 print('step:{}, loss/test/: {}'.format(global_step,testloss))               
         if save_cp:
-            dir_checkpoint = '/home/huangz78/mri/checkpoints/'
+            dir_checkpoint = '/home/huangz78/checkpoints/'
             try:
                 os.mkdir(dir_checkpoint)
                 print('Created checkpoint directory')
@@ -113,7 +113,7 @@ def train_net(net,epochs=5,batch_size=5,\
         testloss = criterion(pred, testfull)
         test_loss.append(testloss.item())
         scheduler.step()
-        np.savez('/home/huangz78/mri/mri_unet_rec.npz',trainloss=train_loss,testloss=test_loss)
+        np.savez('/home/huangz78/checkpoints/mri_unet_rec.npz',trainloss=train_loss,testloss=test_loss)
 
 if __name__ == '__main__':
     unet = UNet(n_channels=1,n_classes=1,bilinear=True,skip=False)

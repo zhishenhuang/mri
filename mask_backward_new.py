@@ -28,8 +28,15 @@ def proj_eps(M,eps):
         return M
     
     
-def mask_eval(fullmask,xstar,Lambda=10**(-6.31),rho=1e1,unroll_block=8,mode='ADMM',UNET=None,dtyp=torch.double):
-#     from sigpy.mri.app import TotalVariationRecon
+def mask_eval(fullmask,xstar,mode='UNET',\
+              UNET=None,dtyp=torch.float,\
+              Lambda=10**(-6.31),rho=1e1,unroll_block=8):
+    '''
+    Does the predicted mask work better than the random baseline?
+    check method: with respect to a given mask, push them through the same reconstructor, 
+                  compare the reconstructed image in l2 norm
+    '''
+
     imgHeg = xstar.shape[0]; imgWid = xstar.shape[1]
     if isinstance(fullmask,torch.Tensor):
         fullmask = fullmask.numpy()
@@ -37,11 +44,7 @@ def mask_eval(fullmask,xstar,Lambda=10**(-6.31),rho=1e1,unroll_block=8,mode='ADM
         xstar = xstar.numpy()
     yraw = np.fft.fftshift(np.fft.fftn(xstar,norm='ortho')) # roll
     y = np.diag(fullmask)@yraw    
-#     print('ifft error: ', np.sqrt( np.sum((np.abs(x_ifft).flatten()-xstar.flatten())**2) )/np.sqrt( np.sum( (xstar.flatten())**2 )))
-#     plt.clf();plt.imshow(np.abs(x_ifft));plt.colorbar();plt.show()
-#     y = np.reshape(y,(-1,imgHeg,imgWid))
-#     mps = np.ones(y.shape)
-#     x = np.fft.fftshift( np.real(TotalVariationRecon(y, mps, Lambda,show_pbar=False,x=x_ifft).run()) )
+
     if mode=='ADMM':
         x = ADMM_TV(torch.tensor(y),torch.tensor(fullmask),maxIter=unroll_block,Lambda=Lambda,rho=rho,imgInput=False,x_init=None)
         x = x.numpy()
@@ -59,16 +62,19 @@ def mask_eval(fullmask,xstar,Lambda=10**(-6.31),rho=1e1,unroll_block=8,mode='ADM
             x_ifft = np.abs( np.fft.ifftn(np.fft.ifftshift(y),norm='ortho') ) # undo roll
             x_in = torch.tensor(x_ifft,dtype=dtyp).view(1,1,imgHeg,imgWid)
             x = UNET(x_in).detach().numpy()
-            
+    elif mode=='sigpy':
+        from sigpy.mri.app import TotalVariationRecon
+        mps = np.ones((1,imgHeg,imgWid))
+        y   = np.reshape(y,(-1,imgHeg,imgWid))
+        x   = np.fft.fftshift( np.abs(TotalVariationRecon(y, mps, Lambda,show_pbar=False).run()) )    
 #     plt.clf();plt.imshow(np.abs(x_ifft));plt.colorbar();plt.show()
 #     print('x_ifft error: ', np.sqrt( np.sum((x_ifft.flatten()-xstar.flatten())**2) )/np.sqrt( np.sum( (xstar.flatten())**2 )))
     error = np.sqrt( np.sum((x.flatten()-xstar.flatten())**2) )/np.sqrt( np.sum( (xstar.flatten())**2 ))
-#     print('TV error:   ', error)
     return error
 
 def mask_backward(highmask,xstar,\
                   beta=1, alpha=5e-1,maxIter=300,seed=0,lr=1e-3,lr_Lambda=1e-8,eps=1.,\
-                  unroll_block=8,Lambda=10**(-6.5),rho=1e2,mode='ADMM',unet_mode=1,\
+                  unroll_block=8,Lambda=10**(-6.5),rho=1e2,mode='ADMM',unet_mode=1,unet=None,\
                   break_limit=20,print_every=10,\
                   verbose=False,save_cp=False,dtyp=torch.double):
     '''
@@ -112,18 +118,27 @@ def mask_backward(highmask,xstar,\
     torch.autograd.set_detect_anomaly(False)
 #     optimizer = optim.Adagrad([M_high],lr=lr)
     if mode == 'UNET':
-        UNET =  UNet(n_channels=unet_mode,n_classes=unet_mode,bilinear=True,skip=False)
-        checkpoint = torch.load('/home/huangz78/mri/checkpoints/unet_'+ str(UNET.n_channels) +'.pth')
-        UNET.load_state_dict(checkpoint['model_state_dict'])
-        print('Unet loaded successfully from : ' + '/home/huangz78/mri/checkpoints/unet_'+ str(UNET.n_channels) +'.pth' )
-        UNET.train()
-        optimizer = optim.RMSprop([
-                {'params': M_high},
-                {'params': UNET.parameters(),'lr':1e-4}
-            ], lr=lr, weight_decay=1e-8, momentum=0.9)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2)
-        init_mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp) * 100
-        print('loss of the input mask: ', init_mask_loss)
+        if unet is None:
+            UNET =  UNet(n_channels=unet_mode,n_classes=unet_mode,bilinear=True,skip=False)
+            checkpoint = torch.load('/home/huangz78/mri/checkpoints/unet_'+ str(UNET.n_channels) +'.pth')
+            UNET.load_state_dict(checkpoint['model_state_dict'])
+            print('Unet loaded successfully from : ' + '/home/huangz78/mri/checkpoints/unet_'+ str(UNET.n_channels) +'.pth' )
+            UNET.train()
+            optimizer = optim.RMSprop([
+                    {'params': M_high},
+                    {'params': UNET.parameters(),'lr':1e-4}
+                ], lr=lr, weight_decay=1e-8, momentum=0.9)
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2)
+            init_mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp) * 100
+            print('loss of the input mask: ', init_mask_loss)
+        else:
+            UNET = unet
+            UNET.train()
+            optimizer = optim.RMSprop([
+                    {'params': M_high},
+                    {'params': UNET.parameters(),'lr':1e-4}
+                ], lr=lr, weight_decay=1e-8, momentum=0.9)
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2)
     else:
         optimizer = optim.SGD([M_high],lr=lr)
         print('loss of the input mask: ', mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100)
@@ -219,8 +234,10 @@ def mask_backward(highmask,xstar,\
 
         
     print('loss of returned mask: ',mask_loss)
-#     return MASK,Lambda,perturbList
-    return highmask_refined, mask_loss, init_mask_loss
+    if unet is None:
+        return highmask_refined, mask_loss, init_mask_loss
+    else:
+        return highmask_refined, UNET
 
 # arxived code blocks:
 #         perturb=False, perturb_freq=2 
@@ -231,3 +248,4 @@ def mask_backward(highmask,xstar,\
 #             M_high.grad = M_high.grad + 1/lr *1/5*torch.max(torch.abs(M_high)) * r
 #             flag_perturb = False
 #             repCount = 0
+#     return MASK,Lambda,perturbList
