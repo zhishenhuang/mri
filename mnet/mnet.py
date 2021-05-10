@@ -133,7 +133,3 @@ class MNet(nn.Module):
         # M  = torch.sigmoid( self.beta * self.fc3(M) ) # sigmoid
         # M  = Func.relu(M-self.soft) # for testing purposes only   # + self.soft # soft-thresholding
         return M
-#         M_return = torch.zeros(batchsize,self.imgHeg)
-#         M_return[:, self.predinds] = M
-#         M_return[:, self.coreinds] = 1e6
-#         return M_return

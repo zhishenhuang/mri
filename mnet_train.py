@@ -179,11 +179,11 @@ if __name__ == '__main__':
 
     imgNum = datashape[2]
     traininds, testinds = train_test_split(np.arange(imgNum),random_state=0,shuffle=True,train_size=round(imgNum*0.8))
-    test_total   = testinds.size
-    traindata    = data_under[traininds,:,:]
-    trainlabels  = mask_filter(labels[traininds,:],base=base)
-    valdata      = data_under[testinds[0:test_total//2],:,:]
-    vallabels    = mask_filter(labels[testinds[0:test_total//2],:],base=base)
+    test_total  = testinds.size
+    traindata   = data_under[traininds,:,:]
+    trainlabels = mask_filter(labels[traininds,:],base=base)
+    valdata     = data_under[testinds[0:test_total//2],:,:]
+    vallabels   = mask_filter(labels[testinds[0:test_total//2],:],base=base)
 
 
     if args.model_path is not None:
@@ -198,7 +198,7 @@ if __name__ == '__main__':
     else:
         model = None
 
-    trainMNet(traindata, trainlabels, valdata, vallabels,
+    trainMNet(traindata, trainlabels, valdata, vallabels,model=model, \
               epochs=args.epochs, batchsize=args.batchsize, \
               positive_weight=args.positive_weight,\
               lr=args.lr, lr_weight_decay=0, opt_momentum=0,\

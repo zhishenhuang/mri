@@ -13,7 +13,7 @@ import utils
 import logging
 import matplotlib.pyplot as plt
 
-from utils import mask_complete , mask_makebinary, kplot
+from utils import mask_complete , mask_makebinary, mask_naiveRand, raw_normalize, get_x_f_from_yfull
 from solvers import ADMM_TV
 
 sys.path.insert(0,'/home/huangz78/mri/unet/')
@@ -72,18 +72,26 @@ def mask_eval(fullmask,xstar,mode='UNET',\
     error = np.sqrt( np.sum((x.flatten()-xstar.flatten())**2) )/np.sqrt( np.sum( (xstar.flatten())**2 ))
     return error
 
+def nrmse(x,xstar):
+    '''
+    input should be torch tensors
+    '''
+    return torch.sqrt(torch.sum((torch.flatten(x)-torch.flatten(xstar) )**2))/torch.sqrt(torch.sum(torch.flatten(xstar)**2))
+
 def mask_backward(highmask,xstar,\
-                  beta=1, alpha=5e-1,maxIter=300,seed=0,lr=1e-3,lr_Lambda=1e-8,eps=1.,\
-                  unroll_block=8,Lambda=10**(-6.5),rho=1e2,mode='ADMM',unet_mode=1,unet=None,\
+                  maxIter=300,seed=0,lr=1e-3,eps=1.,normalize=True,budget=20,\
+                  beta=1, alpha=5e-1,c =.1,\
+                  unet_mode=1,unet=None,mnet=None,\
+                  unroll_block=8,Lambda=10**(-6.5),rho=1e2,mode='ADMM',lr_Lambda=1e-8,\
                   break_limit=20,print_every=10,\
-                  verbose=False,save_cp=False,dtyp=torch.double):
+                  verbose=False,save_cp=False,dtyp=torch.float):
     '''
     The purpose of this function is to update mask choice (particularly for high frequency) via backward propagation. 
     The input is one image, the known base ratio and the currently employed high frequency mask for the input image.
     The output is the updated mask.
     
     xstar                : ground truth image
-    highmask             : binary vector, indicating which high frequencies to sample (low frequencies assumed to be central), the initial mask to be polished
+    highmask             : binary vector, indicating which high frequencies to sample (low frequencies assumed to be central, i.e., the highmask is 'rolled'), the initial mask to be polished
     Lambda               : ADMM parameter lambda (magnitude of TV penalty)
     rho                  : ADMM parameter rho
     mode                 : 'ADMM' for actual usage, 'IFFT' for debugging
@@ -92,9 +100,12 @@ def mask_backward(highmask,xstar,\
     lr                   : learning rate to update mask indicator, default 1e-3
     lr_Lambda            : learning rate to update the ADMM parameter Lambda
     alpha                : l1 penalty magnitude when selecting high frequency masks
+    c                    : magnitude for consistency term || M - mnet(x_lf) ||_2
     seed                 : random seed, default 0
     break_limit          : if no change in loss or row selection for this many iteration rounds, then break
     eps                  : hard thresholding value [0,eps] union [1-eps,1], default 1
+    budget               : targeted sampling budget for the highmask. Note, the budget is only for the high frequencies, not including the observed low frequencies
+    normalize            : whether to normalize the output mask to the specified sampling budget
     
     -- disabled args
     perturb              : flag to inject noise into gradients when update the mask, currently disabled!
@@ -108,15 +119,23 @@ def mask_backward(highmask,xstar,\
     imgHeg,imgWid = xstar.shape[0],xstar.shape[1]
     xstar = torch.tensor(xstar,dtype=dtyp); highmask = torch.tensor(highmask,dtype=dtyp)
     xstar = xstar/torch.max(torch.abs(xstar.flatten()))
-    y = torch.roll(F.fftn(xstar,dim=(0,1),norm='ortho'),shifts=(imgHeg//2,imgWid//2),dims=(0,1))
+    y = torch.fft.fftshift(F.fftn(xstar,dim=(0,1),norm='ortho'))
+    
+    corefreq = imgHeg - highmask.shape[0]
+    lowfreqmask,_,_ = mask_naiveRand(xstar.shape[0],fix=corefreq,other=0,roll=True)
+    x_lf = get_x_f_from_yfull(lowfreqmask,y)
+    mnet.eval()
+    mask_pred = mnet(x_lf.view(1,1,xstar.shape[0],xstar.shape[1])).view(-1)
+    
     ## initialising M
     M_high = highmask.clone().detach()
     M_high.requires_grad = True
     fullmask = torch.tensor( mask_complete(M_high,imgHeg,dtyp=dtyp) ) 
     fullmask_b = fullmask.clone()
     
+    criterion_mnet = nn.BCEWithLogitsLoss()
     torch.autograd.set_detect_anomaly(False)
-#     optimizer = optim.Adagrad([M_high],lr=lr)
+    
     if mode == 'UNET':
         if unet is None:
             UNET =  UNet(n_channels=unet_mode,n_classes=unet_mode,bilinear=True,skip=False)
@@ -139,18 +158,17 @@ def mask_backward(highmask,xstar,\
                     {'params': UNET.parameters(),'lr':1e-4}
                 ], lr=lr, weight_decay=1e-8, momentum=0.9)
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2)
-    else:
+    else: # mode is unrolling iterative methods
         optimizer = optim.SGD([M_high],lr=lr)
         print('loss of the input mask: ', mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100)
 #     optimizer = optim.SGD([{'params':M_high,'lr':lr},{'params':Lambda,'lr':lr_Lambda}])
     repCount = 0; rCount = 0
-    flag_perturb = False; perturbList  = list([])  
+#    flag_perturb = False; perturbList  = list([])  
   
     Iter = 0; loss_old = np.inf; x = None
     cr_per_batch = 0
     while Iter < maxIter:
-        z = torch.roll(torch.tensordot(torch.diag(fullmask).to(DType),y,dims=([1],[0])) , \
-                       shifts=(imgHeg//2,imgWid//2),dims=(0,1))# need to fftshift y and then fftshift y back
+        z = torch.fft.ifftshift(torch.tensordot(torch.diag(fullmask).to(DType),y,dims=([1],[0]))) # need to fftshift y and then fftshift y back
         ## Reconstruction process
         if mode == 'ADMM':
             x   = ADMM_TV(z,fullmask,maxIter=unroll_block,Lambda=Lambda,rho=rho,imgInput=False,x_init=None)
@@ -169,8 +187,10 @@ def mask_backward(highmask,xstar,\
                 x = UNET(x_in)
         elif mode == 'IFFT': # debug
             x   = torch.abs(F.ifftn(z,dim=(0,1),norm='ortho')) # should involve the mask to cater for the lower-level objective
-                
-        loss = torch.sqrt(torch.sum((torch.flatten(x)-torch.flatten(xstar) )**2))/torch.sqrt(torch.sum(torch.flatten(xstar)**2)) + alpha*torch.norm(M_high,p=1) ## upper-level loss = nrmse + alpha*||M||_1
+        breakpoint()
+        loss = nrmse(x,xstar) + alpha * torch.norm(M_high,p=1) + c * criterion_mnet(mask_pred,M_high.view(mask_pred.shape))
+        ## upper-level loss = nrmse + alpha * ||M||_1 + c * mnet_pred_loss
+        ## the last term is added to enforce consistency between mask_backward and mnet in the iteration process, May 7
         if loss.item() < loss_old:
             loss_old = loss.item()
             repCount = 0
@@ -226,6 +246,8 @@ def mask_backward(highmask,xstar,\
             print(f'\t Checkpoint saved after Iter {Iter + 1}!')
         Iter += 1
     
+    if normalize:
+        M_high = raw_normalize(M_high,budget,threshold=0.5)
     highmask_refined = mask_makebinary(M_high,threshold=0.5,sigma=False)
     print('\nreturn at Iter: ', Iter)
     

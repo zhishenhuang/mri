@@ -116,12 +116,28 @@ def shiftsamp(sparsity,imgHeg):
 
 def raw_normalize(M,budget,threshold=0.5):
     '''
+    M: full mask 
+    budget: how many frequencies to sample
+    threshold: deafult 0.5
     to be applied after sigmoid but before binarize!
     '''
-    if torch.sum(M>threshold) > budget:
-        sampinds  = np.argsort(M.detach().numpy())[::-1][0:budget]
-        eraseinds = np.setdiff1d(np.arange(0,M.shape[0],1),sampinds)
-        M[eraseinds] = 0
+    d = M.shape[0]
+    assert(budget <= d)
+    alpha = budget/d
+    nnz   = torch.sum(M>threshold)
+    pbar  = nnz/d
+    with torch.no_grad():
+        if  nnz > budget:
+            sampinds  = np.argsort(M.detach().numpy())[::-1][0:budget]
+            eraseinds = np.setdiff1d(np.arange(0,M.shape[0],1),sampinds)
+            M[eraseinds] = 0
+        elif nnz < budget:
+            M_tmp = 1-(1-alpha)/(1-pbar)*(1-M)
+            sampinds  = np.argsort(M_tmp.detach().numpy())[::-1][0:budget]
+            eraseinds = np.setdiff1d(np.arange(0,M_tmp.shape[0],1),sampinds)
+            M_out = torch.ones_like(M_tmp)
+            M_out[eraseinds] = 0
+            M = M_out
     return M
 
 def mask_prob(img,fix=10,other=30,roll=True):
@@ -214,6 +230,11 @@ def mask_filter(M,base=10,roll=False):
         M_high = M[:,np.setdiff1d(np.arange(Heg),coreInds)]
         
     return M_high
+
+def get_x_f_from_yfull(mask,yfull,DTyp=torch.cfloat):
+    z_f = torch.fft.ifftshift(torch.tensordot(torch.diag(mask).to(DTyp),yfull,dims=([1],[0])))
+    x_f = torch.abs(F.ifftn(z_f,dim=(0,1),norm='ortho'))
+    return x_f
 
 # warmup protocol
 def mask_pnorm(y,fix=10,other=30,p=2):
