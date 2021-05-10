@@ -35,6 +35,7 @@ def mask_eval(fullmask,xstar,mode='UNET',\
     Does the predicted mask work better than the random baseline?
     check method: with respect to a given mask, push them through the same reconstructor, 
                   compare the reconstructed image in l2 norm
+    the lower the output is, the better the mask is
     '''
 
     imgHeg = xstar.shape[0]; imgWid = xstar.shape[1]
@@ -125,7 +126,7 @@ def mask_backward(highmask,xstar,\
     lowfreqmask,_,_ = mask_naiveRand(xstar.shape[0],fix=corefreq,other=0,roll=True)
     x_lf = get_x_f_from_yfull(lowfreqmask,y)
     mnet.eval()
-    mask_pred = mnet(x_lf.view(1,1,xstar.shape[0],xstar.shape[1])).view(-1)
+    mask_pred = mnet(x_lf.view(1,1,xstar.shape[0],xstar.shape[1])).detach().view(-1)
     
     ## initialising M
     M_high = highmask.clone().detach()
@@ -187,7 +188,6 @@ def mask_backward(highmask,xstar,\
                 x = UNET(x_in)
         elif mode == 'IFFT': # debug
             x   = torch.abs(F.ifftn(z,dim=(0,1),norm='ortho')) # should involve the mask to cater for the lower-level objective
-        breakpoint()
         loss = nrmse(x,xstar) + alpha * torch.norm(M_high,p=1) + c * criterion_mnet(mask_pred,M_high.view(mask_pred.shape))
         ## upper-level loss = nrmse + alpha * ||M||_1 + c * mnet_pred_loss
         ## the last term is added to enforce consistency between mask_backward and mnet in the iteration process, May 7

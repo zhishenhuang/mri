@@ -93,6 +93,41 @@ def kplot(y,roll=False,log=False,cmap=None,flip=True):
         plt.colorbar(hd1,ax=axs)
         plt.rcParams.update({'font.size': 25})
         plt.show()
+        
+        
+def visualization(randqual,mnetqual,greedyqual=None,randspar=None,mnetspar=None,greedyspar=None,\
+                  log1=False,log2=False):
+    if (randspar is not None) and (mnetspar is not None):
+        fig,axs = plt.subplots(2,1,figsize=(10, 6))
+    else:
+        fig,axs = plt.subplots(1,1,figsize=(6, 6))
+    axs[0].set_xlabel('iters', fontsize=16)
+    axs[0].set_ylabel('G loss', color='r', fontsize=16)
+    axs[0].scatter(randqual, color='r',label='rand.')
+    axs[0].scatter(mnetqual, color='g',label='mnet.')
+    if greedyqual is not None:
+        axs[0].scatter(greedyqual,color='b',label='greedy')
+    axs[0].tick_params(axis='x', labelsize='large')
+    axs[0].tick_params(axis='y', labelsize='large')
+    axs[0].legend(loc='best')
+    if log1:
+        axs[0].set_yscale('log')
+    
+
+    if (randspar is not None) and (mnetspar is not None):
+        axs[1].set_xlabel('iters', fontsize=16)
+        axs[1].set_ylabel('sampling ratio', fontsize=16)
+        axs[1].scatter(randspar,color='r',label='rand.')
+        axs[1].scatter(mnetqual,color='g',label='mnet.')
+        if greedyspar is not None:
+            axs[1].scatter(greedyspar,color='b',label='greedy')
+        if log2:
+            axs[1].set_yscale('log')
+        axs[1].tick_params(axis='x', labelsize='large')
+        axs[1].tick_params(axis='y', labelsize='large')
+        axs[1].legend(loc='best')
+    
+    plt.show()
 
 def shiftsamp(sparsity,imgHeg):
     '''
