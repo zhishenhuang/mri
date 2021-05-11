@@ -102,11 +102,11 @@ def visualization(randqual,mnetqual,greedyqual=None,randspar=None,mnetspar=None,
     else:
         fig,axs = plt.subplots(1,1,figsize=(6, 6))
     axs[0].set_xlabel('iters', fontsize=16)
-    axs[0].set_ylabel('G loss', color='r', fontsize=16)
-    axs[0].scatter(randqual, color='r',label='rand.')
-    axs[0].scatter(mnetqual, color='g',label='mnet.')
+    axs[0].set_ylabel('mask quality', color='r', fontsize=16)
+    axs[0].scatter(np.arange(0,len(randqual),1),randqual, color='r',label='rand.',marker='d',s=50)
+    axs[0].scatter(np.arange(0,len(mnetqual),1),mnetqual, color='g',label='mnet.',marker='o',s=50)
     if greedyqual is not None:
-        axs[0].scatter(greedyqual,color='b',label='greedy')
+        axs[0].scatter(np.arange(0,len(greedyqual),1),greedyqual,color='b',label='greedy',marker='h',s=50)
     axs[0].tick_params(axis='x', labelsize='large')
     axs[0].tick_params(axis='y', labelsize='large')
     axs[0].legend(loc='best')
@@ -117,10 +117,10 @@ def visualization(randqual,mnetqual,greedyqual=None,randspar=None,mnetspar=None,
     if (randspar is not None) and (mnetspar is not None):
         axs[1].set_xlabel('iters', fontsize=16)
         axs[1].set_ylabel('sampling ratio', fontsize=16)
-        axs[1].scatter(randspar,color='r',label='rand.')
-        axs[1].scatter(mnetqual,color='g',label='mnet.')
+        axs[1].scatter(np.arange(0,len(randspar),1),randspar,color='r',label='rand.',marker='d',s=50)
+        axs[1].scatter(np.arange(0,len(mnetspar),1),mnetspar,color='g',label='mnet.',marker='o',s=50)
         if greedyspar is not None:
-            axs[1].scatter(greedyspar,color='b',label='greedy')
+            axs[1].scatter(np.arange(0,len(greedyspar),1),greedyspar,color='b',label='greedy',marker='h',s=50)
         if log2:
             axs[1].set_yscale('log')
         axs[1].tick_params(axis='x', labelsize='large')

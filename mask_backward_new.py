@@ -188,7 +188,8 @@ def mask_backward(highmask,xstar,\
                 x = UNET(x_in)
         elif mode == 'IFFT': # debug
             x   = torch.abs(F.ifftn(z,dim=(0,1),norm='ortho')) # should involve the mask to cater for the lower-level objective
-        loss = nrmse(x,xstar) + alpha * torch.norm(M_high,p=1) + c * criterion_mnet(mask_pred,M_high.view(mask_pred.shape))
+        
+        loss = nrmse(x,xstar) + alpha * torch.norm(M_high,p=1) + c * criterion_mnet(M_high.view(mask_pred.shape),mask_pred)
         ## upper-level loss = nrmse + alpha * ||M||_1 + c * mnet_pred_loss
         ## the last term is added to enforce consistency between mask_backward and mnet in the iteration process, May 7
         if loss.item() < loss_old:
@@ -199,6 +200,7 @@ def mask_backward(highmask,xstar,\
 #             if repCount >= perturb_freq:
 #                 flag_perturb = True
             if repCount >= break_limit:
+#                 if verbose:
                 print('No further decrease in loss after {} consecutive iters, ending iterations~ '.format(repCount))
                 break
 
@@ -211,15 +213,16 @@ def mask_backward(highmask,xstar,\
         
         fullmask_b = mask_makebinary(fullmask.clone().detach(),threshold=0.5,sigma=False)
         mask_sparsity = torch.sum(fullmask_b).item()/fullmask_b.size()[0]
-        delta_mask   = fullmask_old-fullmask_b
-        added_rows   = torch.sum(delta_mask==-1).item();   reducted_rows= torch.sum(delta_mask==1).item()
-        changed_rows = torch.abs(delta_mask).sum().item()
+        delta_mask    = fullmask_old-fullmask_b
+        added_rows    = torch.sum(delta_mask==-1).item();   reducted_rows= torch.sum(delta_mask==1).item()
+        changed_rows  = torch.abs(delta_mask).sum().item()
         cr_per_batch += changed_rows
         if changed_rows == 0:
             rCount += 1
         else:
             rCount = 0
         if rCount > break_limit:
+#             if verbose:
             print('No change in row selections after {} iters, ending iteration~'.format(rCount))
             break
         if verbose and (changed_rows>0): # if there is any changed rows, then it is reported in every iteration
@@ -249,15 +252,15 @@ def mask_backward(highmask,xstar,\
     if normalize:
         M_high = raw_normalize(M_high,budget,threshold=0.5)
     highmask_refined = mask_makebinary(M_high,threshold=0.5,sigma=False)
-    print('\nreturn at Iter: ', Iter)
     
     if mode=='ADMM':
         mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100
     elif mode=='UNET':
         mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,mode='UNET',UNET=UNET,dtyp=dtyp) * 100
-
-        
+#     if verbose:
+    print('\nreturn at Iter: ', Iter)   
     print('loss of returned mask: ',mask_loss)
+    
     if unet is None:
         return highmask_refined, mask_loss, init_mask_loss
     else:
