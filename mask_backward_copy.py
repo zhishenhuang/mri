@@ -26,53 +26,57 @@ def proj_eps(M,eps):
         M[(M<0)] = 0
         M[(M>1)] = 1
         return M
-def nrmse(x,xstar):
-    '''
-    input should be torch tensors
-    '''
-    return torch.sqrt(torch.sum((torch.flatten(x)-torch.flatten(xstar) )**2))/torch.sqrt(torch.sum(torch.flatten(xstar)**2))    
     
-def mask_eval(fullmask,xstar,\
-              mode='UNET',UNET=None,dtyp=torch.float,\
-              Lambda=10**(-6.31),rho=1e1,unroll_block=8): # done
+    
+def mask_eval(fullmask,xstar,mode='UNET',\
+              UNET=None,dtyp=torch.float,\
+              Lambda=10**(-6.31),rho=1e1,unroll_block=8):
     '''
     Does the predicted mask work better than the random baseline?
     check method: with respect to a given mask, push them through the same reconstructor, 
                   compare the reconstructed image in l2 norm
     the lower the output is, the better the mask is
     '''
-    
-    batchsize = xstar.shape[0]; imgHeg = xstar.shape[1]; imgWid = xstar.shape[2]
-    for layer in range(batchsize):
-        xstar[layer,:,:] = xstar[layer,:,:]/torch.max(torch.abs(xstar[layer,:,:].flatten()))
-    y = torch.fft.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho'),dim=(1,2))    
-    z = torch.zeros(y.shape).to(y.dtype)
-    for ind in range(batchsize):
-        z[ind,:,:] = y[ind,fullmask[ind,:]==1,:]
-    z = torch.fft.ifftshift(z , dim=(1,2)) 
-    if mode=='UNET':
+
+    imgHeg = xstar.shape[0]; imgWid = xstar.shape[1]
+    if isinstance(fullmask,torch.Tensor):
+        fullmask = fullmask.numpy()
+    if isinstance(xstar,torch.Tensor):
+        xstar = xstar.numpy()
+    yraw = np.fft.fftshift(np.fft.fftn(xstar,norm='ortho')) # roll
+    y = np.diag(fullmask)@yraw    
+
+    if mode=='ADMM':
+        x = ADMM_TV(torch.tensor(y),torch.tensor(fullmask),maxIter=unroll_block,Lambda=Lambda,rho=rho,imgInput=False,x_init=None)
+        x = x.numpy()
+    elif mode=='UNET':
         if UNET.n_channels == 2:
-            zcp = torch.zeros((batchsize,2,imgHeg,imgWid),dtype=dtyp)
-            zcp[:,0,:,:] = torch.real(z)
-            zcp[:,1,:,:] = torch.imag(z)
-            zprime = UNET(zcp)
-            zrecon = zprime[:,0,:,:] + 1j*zprime[:,1,:,:]
-            x = torch.abs(F.ifftn(zrecon,dim=(1,2),norm='ortho'))
+            y = torch.tensor(y)
+            ycp = torch.zeros((1,2,imgHeg,imgWid),dtype=dtyp) # batchsize is 1 here
+            ycp[:,0,:,:] = torch.reshape(torch.real(y),(1,imgHeg,imgWid))
+            ycp[:,1,:,:] = torch.reshape(torch.imag(y),(1,imgHeg,imgWid))
+            yprime = UNET(ycp)
+            yrecon = yprime[:,0,:,:] + 1j*yprime[:,1,:,:]
+            x = torch.abs(F.ifftn(torch.reshape(yrecon,(imgHeg,imgWid)),dim=(0,1),norm='ortho'))
+            x = x.detach().numpy()
         elif UNET.n_channels == 1:
-            x_ifft = torch.abs( F.ifftn(z,dim=(1,2),norm='ortho') ) 
-            x_in = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
-            x = UNET(x_in)
-        error = nrmse(x,xstar)
+            x_ifft = np.abs( np.fft.ifftn(np.fft.ifftshift(y),norm='ortho') ) # undo roll
+            x_in = torch.tensor(x_ifft,dtype=dtyp).view(1,1,imgHeg,imgWid)
+            x = UNET(x_in).detach().numpy()
     elif mode=='sigpy':       
         mps = np.ones((1,imgHeg,imgWid))
-        x = np.zeros(y.shape)
-        for ind in range(batchsize):
-            y_tmp = np.reshape(y[ind,:,:].numpy(),(-1,imgHeg,imgWid))
-            x[ind,:,:] = np.fft.fftshift( np.abs(TotalVariationRecon(y_tmp, mps, Lambda,show_pbar=False).run()) )    
-        xstar = xstar.numpy()
-        error = np.sqrt( np.sum((x.flatten()-xstar.flatten())**2) )/np.sqrt( np.sum( (xstar.flatten())**2 ))
+        y   = np.reshape(y,(-1,imgHeg,imgWid))
+        x   = np.fft.fftshift( np.abs(TotalVariationRecon(y, mps, Lambda,show_pbar=False).run()) )    
+#     plt.clf();plt.imshow(np.abs(x_ifft));plt.colorbar();plt.show()
+#     print('x_ifft error: ', np.sqrt( np.sum((x_ifft.flatten()-xstar.flatten())**2) )/np.sqrt( np.sum( (xstar.flatten())**2 )))
+    error = np.sqrt( np.sum((x.flatten()-xstar.flatten())**2) )/np.sqrt( np.sum( (xstar.flatten())**2 ))
     return error
 
+def nrmse(x,xstar):
+    '''
+    input should be torch tensors
+    '''
+    return torch.sqrt(torch.sum((torch.flatten(x)-torch.flatten(xstar) )**2))/torch.sqrt(torch.sum(torch.flatten(xstar)**2))
 
 def mask_backward(highmask,xstar,\
                   maxIter=300,seed=0,lr=1e-3,eps=1.,normalize=True,budget=20,\
@@ -111,18 +115,20 @@ def mask_backward(highmask,xstar,\
     May 18: need to make xstar as a batch because BatchNorm2d will render batchsize=1 constantly zero.
     '''
     torch.manual_seed(seed)
-    batchsize,imgHeg,imgWid = xstar.shape[0],xstar.shape[1],xstar.shape[2]
-    xstar = torch.tensor(xstar,dtype=dtyp)
-    highmask = torch.tensor(highmask,dtype=dtyp)
-    for layer in range(batchsize):
-        xstar[layer,:,:] = xstar[layer,:,:]/torch.max(torch.abs(xstar[layer,:,:].flatten()))
-    y = torch.fft.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho'),dim=(1,2))
+    if dtyp == torch.double:
+        DType = torch.cdouble
+    else:
+        DType = torch.cfloat
+    imgHeg,imgWid = xstar.shape[0],xstar.shape[1]
+    xstar = torch.tensor(xstar,dtype=dtyp); highmask = torch.tensor(highmask,dtype=dtyp)
+    xstar = xstar/torch.max(torch.abs(xstar.flatten()))
+    y = torch.fft.fftshift(F.fftn(xstar,dim=(0,1),norm='ortho'))
     
-    corefreq = imgHeg - highmask.shape[1]
-    lowfreqmask,_,_ = mask_naiveRand(imgHeg,fix=corefreq,other=0,roll=True)
+    corefreq = imgHeg - highmask.shape[0]
+    lowfreqmask,_,_ = mask_naiveRand(xstar.shape[0],fix=corefreq,other=0,roll=True)
     x_lf = get_x_f_from_yfull(lowfreqmask,y)
     mnet.eval()
-    mask_pred = mnet(x_lf.view(batchsize,1,imgHeg,imgWid)).detach()
+    mask_pred = mnet(x_lf.view(1,1,xstar.shape[0],xstar.shape[1])).detach().view(-1)
     
     ## initialising M
     M_high = highmask.clone().detach()
@@ -160,31 +166,31 @@ def mask_backward(highmask,xstar,\
         print('loss of the input mask: ', mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100)
 #     optimizer = optim.SGD([{'params':M_high,'lr':lr},{'params':Lambda,'lr':lr_Lambda}])
     repCount = 0; rCount = 0
+#    flag_perturb = False; perturbList  = list([])  
   
     Iter = 0; loss_old = np.inf; x = None
     cr_per_batch = 0
     while Iter < maxIter:
-        z = torch.zeros(y.shape).to(y.dtype)
-        for ind in range(batchsize):
-            z[ind,:,:] = torch.tensordot( torch.diag(fullmask[ind,:]).to(y.dtype),y[ind,:,:],dims=([1],[0]) )
-        z = torch.fft.ifftshift(z , dim=(1,2)) 
+        z = torch.fft.ifftshift(torch.tensordot(torch.diag(fullmask).to(DType),y,dims=([1],[0]))) # need to fftshift y and then fftshift y back
         ## Reconstruction process
         if mode == 'ADMM':
             x   = ADMM_TV(z,fullmask,maxIter=unroll_block,Lambda=Lambda,rho=rho,imgInput=False,x_init=None)
 #             x = learnable_unrolled_algo(z,fullmask) # maybe PDHG
         if mode == 'UNET':
             if UNET.n_channels == 2:
-                zcp = torch.zeros((batchsize,2,imgHeg,imgWid),dtype=dtyp)
-                zcp[:,0,:,:] = torch.real(z)
-                zcp[:,1,:,:] = torch.imag(z)
+                zcp = torch.zeros((1,2,imgHeg,imgWid),dtype=dtyp) # batchsize is 1 here
+                zcp[:,0,:,:] = torch.reshape(torch.real(z),(1,imgHeg,imgWid))
+                zcp[:,1,:,:] = torch.reshape(torch.imag(z),(1,imgHeg,imgWid))
                 zprime = UNET(zcp)
                 zrecon = zprime[:,0,:,:] + 1j*zprime[:,1,:,:]
-                x = torch.abs(F.ifftn(zrecon,dim=(1,2),norm='ortho'))
+                x = torch.abs(F.ifftn(torch.reshape(zrecon,(imgHeg,imgWid)),dim=(0,1),norm='ortho'))
             elif UNET.n_channels == 1:
-                x_ifft = torch.abs( F.ifftn(z,dim=(1,2),norm='ortho') ) 
-                x_in = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
+                x_ifft = torch.abs( F.ifftn(z,dim=(0,1),norm='ortho') ) # undo roll
+                x_in = x_ifft.view(1,1,imgHeg,imgWid).to(dtyp)
                 x = UNET(x_in)
-                
+        elif mode == 'IFFT': # debug
+            x   = torch.abs(F.ifftn(z,dim=(0,1),norm='ortho')) # should involve the mask to cater for the lower-level objective
+        
         loss = nrmse(x,xstar) + alpha * torch.norm(M_high,p=1) + c * criterion_mnet(M_high.view(mask_pred.shape),mask_pred)
         ## upper-level loss = nrmse + alpha * ||M||_1 + c * mnet_pred_loss
         ## the last term is added to enforce consistency between mask_backward and mnet in the iteration process, May 7
@@ -193,7 +199,10 @@ def mask_backward(highmask,xstar,\
             repCount = 0
         elif loss.item() >= loss_old:
             repCount += 1
+#             if repCount >= perturb_freq:
+#                 flag_perturb = True
             if repCount >= break_limit:
+#                 if verbose:
                 print('No further decrease in loss after {} consecutive iters, ending iterations~ '.format(repCount))
                 break
 
@@ -209,10 +218,10 @@ def mask_backward(highmask,xstar,\
         #################################
         
         fullmask_b = mask_makebinary(fullmask.clone().detach(),threshold=0.5,sigma=False)
-        mask_sparsity = torch.sum(fullmask_b).item()/(batchsize*imgHeg)
+        mask_sparsity = torch.sum(fullmask_b).item()/fullmask_b.size()[0]
         delta_mask    = fullmask_old-fullmask_b
-        added_rows    = torch.sum(delta_mask==-1).item()/batchsize;   reducted_rows= torch.sum(delta_mask==1).item()/batchsize
-        changed_rows  = torch.abs(delta_mask).sum().item()/batchsize
+        added_rows    = torch.sum(delta_mask==-1).item();   reducted_rows= torch.sum(delta_mask==1).item()
+        changed_rows  = torch.abs(delta_mask).sum().item()
         cr_per_batch += changed_rows
         if changed_rows == 0:
             rCount += 1
@@ -233,7 +242,7 @@ def mask_backward(highmask,xstar,\
                     elif mode=='UNET':
                         mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp) * 100
                     print('iter: {}, upper level loss: {}\n changed rows in this batch: {}, loss of current mask: {}'.format(Iter+1,loss,cr_per_batch,mask_loss))
-                    print('samp. ratio: {}, Recon. rel. err: {} \n'.format(mask_sparsity,nrmse(x,xstar)) )
+                    print('samp. ratio: {}, Recon. rel. err: {} \n'.format(mask_sparsity,(torch.norm(torch.flatten(x)-torch.flatten(xstar),'fro')/torch.norm(torch.flatten(xstar),'fro')).item()) )
                     cr_per_batch = 0
                     scheduler.step(mask_loss)
                 else:
@@ -260,3 +269,13 @@ def mask_backward(highmask,xstar,\
     else:
         return highmask_refined, UNET
 
+# arxived code blocks:
+#         perturb=False, perturb_freq=2 
+#         if flag_perturb and perturb: # purturbation
+#             perturbList.append(Iter)
+#             r = torch.randn(M_high.shape)
+#             r = r/torch.norm(r)
+#             M_high.grad = M_high.grad + 1/lr *1/5*torch.max(torch.abs(M_high)) * r
+#             flag_perturb = False
+#             repCount = 0
+#     return MASK,Lambda,perturbList

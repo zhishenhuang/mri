@@ -18,14 +18,15 @@ sys.path.insert(0,'/home/huangz78/mri/mnet/')
 from mnet import MNet
 from sklearn.metrics import precision_score
 from sklearn.metrics import recall_score
-
+    
 def sigmoid_binarize(M,threshold=0.6):
     sigmoid = nn.Sigmoid()
     mask = sigmoid(M)
     mask_pred = torch.ones_like(mask)
-    mask_pred[mask<=threshold] = 0
+    for ind in range(M.shape[0]):
+        mask_pred[ind,mask[ind,:]<=threshold] = 0
     return mask_pred
-    
+
 def trainMNet(trainimgs,trainlabels,testimgs,testlabels,\
               epochs=20,batchsize=5,\
               lr=0.01,lr_weight_decay=1e-8,opt_momentum=0,positive_weight=6,\

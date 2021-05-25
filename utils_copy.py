@@ -94,6 +94,7 @@ def kplot(y,roll=False,log=False,cmap=None,flip=True):
         plt.rcParams.update({'font.size': 25})
         plt.show()
         
+        
 def visualization(randqual,mnetqual,greedyqual=None,randspar=None,mnetspar=None,greedyspar=None,\
                   log1=False,log2=False):
     if (randspar is not None) and (mnetspar is not None):
@@ -185,7 +186,7 @@ def mask_naiveRand(imgHeg,fix=10,other=30,roll=False):
         mask = torch.fft.fftshift(mask)
         return mask,None,None
 
-def mask_makebinary(M,beta=1,threshold=0.5,sigma=True): # done
+def mask_makebinary(M,beta=1,threshold=0.5,sigma=True):
     '''
     return a mask in the form of binary vector
     threshold the continuous mask into a binary mask
@@ -195,27 +196,25 @@ def mask_makebinary(M,beta=1,threshold=0.5,sigma=True): # done
     else:
         Mval = M
     MASK = torch.ones(Mval.shape)
-    for ind in range(M.shape[0]):
-        MASK[ind,Mval[ind,:]<=threshold] = 0
+    MASK[Mval<=threshold] = 0
     return MASK
 
-def mask_complete(highmask,imgHeg,rolled=True,dtyp=torch.float): # done
+def mask_complete(highmask,imgHeg,rolled=True,dtyp=torch.double):
     '''
     mold the highmask into a complete full length mask
     fill observed low frequency with 1
     '''
-    layer = highmask.shape[0]
-    base = imgHeg - highmask.size()[1]
-    fullmask = torch.zeros((layer,imgHeg),dtype=dtyp)
+    base = imgHeg - highmask.size()[0]
+    fullmask = torch.zeros((imgHeg),dtype=dtyp)
     if rolled:
         coreInds = np.arange(int(imgHeg/2)-int(base/2), int(imgHeg/2)+int(base/2))
     else:
         coreInds = np.concatenate((np.arange(0,base//2),np.arange(Heg-1,Heg-1-base//2-base%2,-1)))
-    fullmask[:,coreInds] = 1
-    fullmask[:,np.setdiff1d(np.arange(imgHeg),coreInds)] = highmask
+    fullmask[coreInds] = 1
+    fullmask[np.setdiff1d(np.arange(imgHeg),coreInds)] = highmask
     return fullmask
 
-def mask_filter(M,base=10,roll=False): # done
+def mask_filter(M,base=10,roll=False):
     '''
     M:  input mask, a vector or a matrix. 
         If it is a matrix, the second dimension is assumed to be the mask dimension.
@@ -240,51 +239,41 @@ def mask_filter(M,base=10,roll=False): # done
         
     return M_high
 
-def raw_normalize(M,budget,threshold=0.5): # done
+def raw_normalize(M,budget,threshold=0.5):
     '''
     M: full mask 
     budget: how many frequencies to sample
     threshold: deafult 0.5
     to be applied after sigmoid but before binarize!
     '''
-    d = M.shape[1]
+    d = M.shape[0]
     assert(budget <= d)
     alpha = budget/d
+    nnz   = torch.sum(M>threshold)
+    pbar  = nnz/d
     with torch.no_grad():
-        for ind in range(M.shape[0]):
-            nnz   = torch.sum(M[ind,:]>threshold)
-            pbar  = nnz/d
-            if  nnz > budget:
-                sampinds  = np.argsort(M[ind,:].detach().numpy())[::-1][0:budget]
-                eraseinds = np.setdiff1d(np.arange(0,M.shape[1],1),sampinds)
-                M[ind,eraseinds] = 0
-            elif nnz < budget:
-                M_tmp = 1-(1-alpha)/(1-pbar)*(1-M[ind,:])
-                sampinds  = np.argsort(M_tmp.detach().numpy())[::-1][0:budget]
-                eraseinds = np.setdiff1d(np.arange(0,M_tmp.shape[0],1),sampinds)
-                M_out = torch.ones_like(M_tmp)
-                M_out[eraseinds] = 0
-                M[ind,:] = M_out
+        if  nnz > budget:
+            sampinds  = np.argsort(M.detach().numpy())[::-1][0:budget]
+            eraseinds = np.setdiff1d(np.arange(0,M.shape[0],1),sampinds)
+            M[eraseinds] = 0
+        elif nnz < budget:
+            M_tmp = 1-(1-alpha)/(1-pbar)*(1-M)
+            sampinds  = np.argsort(M_tmp.detach().numpy())[::-1][0:budget]
+            eraseinds = np.setdiff1d(np.arange(0,M_tmp.shape[0],1),sampinds)
+            M_out = torch.ones_like(M_tmp)
+            M_out[eraseinds] = 0
+            M = M_out
     return M
 
-def get_x_f_from_yfull(mask,yfull,DTyp=torch.cfloat): # done
-    if len(mask.shape) == 1:
-        mask = mask.repeat(yfull.shape[0],1)
-    subsamp_z = torch.zeros(yfull.shape).to(DTyp)
-    for ind in range(mask.shape[0]):
-        subsamp_z[ind,mask[ind,:]==1,:] = yfull[ind,mask[ind,:]==1,:]
-        # torch.tensordot( torch.diag(mask[ind,:]).to(DTyp),yfull[ind,:,:],dims=([1],[0]) )
-    z_f = torch.fft.ifftshift(subsamp_z , dim=(1,2))
-    x_f = torch.abs(F.ifftn(z_f,dim=(1,2),norm='ortho'))
+def get_x_f_from_yfull(mask,yfull,DTyp=torch.cfloat):
+    z_f = torch.fft.ifftshift(torch.tensordot(torch.diag(mask).to(DTyp),yfull,dims=([1],[0])))
+    x_f = torch.abs(F.ifftn(z_f,dim=(0,1),norm='ortho'))
     return x_f
 
-def mnet_wrapper(mnet,x_lf,budget,imgshape,dtyp=torch.float): # done
-    if len(x_lf.shape)==3:
-        highmask_raw  = torch.sigmoid( mnet( x_lf.view(x_lf.shape[0],1,imgshape[0],imgshape[1]) ) )   
-    else:
-        highmask_raw  = torch.sigmoid(mnet(x_lf))
+def mnet_wrapper(mnet,x_lf,budget,imgshape,dtyp=torch.float):
+    highmask_raw  = torch.sigmoid( mnet( x_lf.view(x_lf.shape[0],1,imgshape[0],imgshape[1]) ).view(x_lf.shape[0],-1) )   
     highmask      = mask_makebinary( raw_normalize(highmask_raw,budget) , sigma=False )
-    mnetmask      = mask_complete( highmask,imgshape[0],rolled=True,dtyp=dtyp )
+    mnetmask      = mask_complete(highmask.view(-1),imgshape[0],rolled=True,dtyp=dtyp)
     return mnetmask
 
 # warmup protocol
