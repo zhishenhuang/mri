@@ -26,7 +26,7 @@ random.seed(0)
 
 def alternating_update_with_unetRecon(mnet,unet,trainfulls,testimg,mask_init,mask_init_full=True,\
                                       maxIter_mb=50,evalmode='unet',alpha=2.8*1e-5,c=0.05, Lambda=1e-4,\
-                                      lr_mb=1e-4,lr_mn=1e-4,maxRep=5,epoch=1,\
+                                      lr_mb=1e-4,lr_mn=1e-4,maxRep=5,epoch=1,batchsize=5,\
                                       corefreq=24,budget=24,plot=False,verbose=False,mask_greedy=None,\
                                       change_initmask=True,validate_every=10,dtyp=torch.float,\
                                       save_cp=False):
@@ -148,68 +148,80 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,testimg,mask_init,mas
         epoch_count+= 1
 
 
-# def get_args():
-#     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks',
-#                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-#     parser.add_argument('-train','--traindata',type=str,default='/home/huangz78/data/traindata.npz',
-#                         help='train data path', dest='traindata')
-#     parser.add_argument('-test','--testdata',type=str,default='/home/huangz78/data/testdata.npz',
-#                         help='test data path', dest='testdata')
-#     parser.add_argument('-e', '--epochs', metavar='E', type=int, default=60,
-#                         help='Number of epochs', dest='epochs')
-#     parser.add_argument('-b', '--batch-size', metavar='B', type=int, nargs='?', default=5,
-#                         help='Batch size', dest='batchsize')
-#     parser.add_argument('-lr', '--learning-rate', metavar='LR', type=float, nargs='?', default=1e-4,
-#                         help='Learning rate', dest='lr')
-#     parser.add_argument('-tg','--threshold',type=float,nargs='?',default=.5,
-#                         help='threshold for binarinize output', dest='threshold')
-#     parser.add_argument('-m','--check-point',metavar='CR',type=str,nargs='?',default=None,
-#                         help='Path of checkpoint to load', dest='model_path')
-#     parser.add_argument('-beta','--beta',metavar='Beta',type=float,nargs='?',default=1,
-#                         help='Beta for Sigmoid function', dest='beta')
-#     parser.add_argument('-pw','--positive-weight',type=float,nargs='?',default=1,
-#                         help='weight for positive rows',dest='positive_weight')
-#     # parser.add_argument('-f', '--load', dest='load', type=str, default=False,
-#     #                     help='Load model from a .pth file')
-#     # parser.add_argument('-s', '--scale', dest='scale', type=float, default=0.5,
-#     #                     help='Downscaling factor of the images')
+def get_args():
+    parser = argparse.ArgumentParser(description='Train the UNet on images and target masks',
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('-train','--traindata',type=str,default='/home/huangz78/data/traindata_x.npz',
+                        help='train data path', dest='traindata')
+    parser.add_argument('-test','--testdata',type=str,default='/home/huangz78/data/testdata_x.npz',
+                        help='test data path', dest='testdata')
+    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=60,
+                        help='Number of epochs', dest='epochs')
+    parser.add_argument('-b', '--batch-size', metavar='B', type=int, nargs='?', default=5,
+                        help='Batch size', dest='batchsize')
+    parser.add_argument('-lrb', '--learning-rate-backward', metavar='LRB', type=float, nargs='?', default=1e-4,
+                        help='Learning rate for maskbackward', dest='lrb')
+    parser.add_argument('-lrn', '--learning-rate-mnet', metavar='LRN', type=float, nargs='?', default=1e-4,
+                        help='Learning rate for mnet', dest='lrn')
+    parser.add_argument('-tg','--threshold',type=float,nargs='?',default=.5,
+                        help='threshold for binarinize output', dest='threshold')
+    parser.add_argument('-bs','--base-size',metavar='BS',type=int,nargs='?',default=24,
+                        help='number of observed low frequencies', dest='base_freq')
+    parser.add_argument('-bg','--budget',metavar='BG',type=int,nargs='?',default=16,
+                        help='number of high frequencies to sample', dest='budget')
+    parser.add_argument('-beta','--beta',metavar='Beta',type=float,nargs='?',default=1,
+                        help='Beta for Sigmoid function', dest='beta')
+    parser.add_argument('-cin','--channel-input',type=int,nargs='?',default=1,
+                        help='input channel',dest='cin')
+    parser.add_argument('-mp', '--mnet-path', type=str, default='/home/huangz78/checkpoints/mnet.pth',
+                        help='path file for a mnet', dest='mnetpath')
+    parser.add_argument('-up', '--unet-path', type=str, default='/home/huangz78/checkpoints/unet_1.pth',
+                        help='path file for a unet', dest='unetpath')
+    parser.add_argument('-mbit', '--mb-iter-max', type=int, default=5,
+                        help='maximum interation for maskbackward function', dest='maxItermb')
+    parser.add_argument('-mnrep', '--mn-iter-rep', type=int, default=2,
+                        help='inside one batch, updating mnet this many times', dest='mnRep')
 
-#     return parser.parse_args()
+    return parser.parse_args()
 
 
 if __name__=='__main__':
-#     args = get_args()
-#     print(args)
+    args = get_args()
+    print(args)
     
     # load a mnet
-    mnet = MNet(out_size=320-24)
-    checkpoint = torch.load('/home/huangz78/checkpoints/mnet.pth')
+    mnet = MNet(out_size=320-args.base_freq)
+    checkpoint = torch.load(args.mnetpath)
     mnet.load_state_dict(checkpoint['model_state_dict'])
-    print('MNet loaded successfully from: ' + '/home/huangz78/checkpoints/mnet.pth')
+    print('MNet loaded successfully from: ', args.mnetpath)
     
     # load a unet for maskbackward
-    UNET =  UNet(n_channels=1,n_classes=1,bilinear=True,skip=False)
-    checkpoint = torch.load('/home/huangz78/checkpoints/unet_'+ str(UNET.n_channels) +'.pth')
+    UNET =  UNet(n_channels=args.cin,n_classes=1,bilinear=True,skip=False)
+    checkpoint = torch.load(args.unetpath)
     UNET.load_state_dict(checkpoint['model_state_dict'])
-    print('Unet loaded successfully from : ' + '/home/huangz78/checkpoints/unet_'+ str(UNET.n_channels) +'.pth' )
+    print('Unet loaded successfully from : ', arg.unetpath )
     
-    train_dir = '/home/huangz78/data/traindata_x.npz'
-    train_full = np.load(train_dir)['xfull']
+    train_dir  = args.traindata
+    test_dir = args.testdata
+    if args.cin == 1:
+        train_full = np.load(train_dir)['xfull']
+        testimg  = torch.tensor(np.load(test_dir)['x']) 
+        print(testimg.shape)
+    else:
+        train_full = np.load(train_dir)['yfull']
+        testimg  = torch.tensor(np.load(test_dir)['y']) 
+        print(testimg.shape)
     
     fullmask = torch.fft.fftshift(torch.tensor(np.load(train_dir)['mask'])) # roll the input mask
     
-    test_dir = '/home/huangz78/data/testdata_x.npz'
-    testimg  = torch.tensor(np.load(test_dir)['x']) 
-    print(testimg.shape)
-
     mask_greedy = np.load('/home/huangz78/data/data_gt_greedymask.npz')
     mask_greedy = mask_greedy['mask'].T # this greedy mask is rolled
     print(mask_greedy.shape)
     
     alternating_update_with_unetRecon(mnet,UNET,train_full,testimg[0:20,:,:],fullmask,\
-                                  alpha=3e-4,c=1e-2,Lambda=1e-4,epoch=3,\
-                                  lr_mb=1e-3,lr_mn=1e-4,\
-                                  maxIter_mb=5,maxRep=2,\
-                                  corefreq=24,budget=16,\
+                                  alpha=3e-4,c=1e-2,Lambda=1e-4,epoch=args.epochs,batchsize=args.batchsize,\
+                                  lr_mb=args.lrb,lr_mn=args.lrn,\
+                                  maxIter_mb=args.maxItermb,maxRep=args.mnRep,\
+                                  corefreq=args.base_freq,budget=args.budget,\
                                   mask_greedy=mask_greedy,change_initmask=True,\
                                   verbose=False,plot=False,validate_every=50,save_cp=True)

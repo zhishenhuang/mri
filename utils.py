@@ -17,6 +17,27 @@ import torch.nn as nn
 #     return torch.real(F.ifftn(torch.tensordot(M.to(DType) , F.fftn(X,dim=(0),norm='ortho'), \
 #                 dims=([1],[0])),dim=(0),norm='ortho'))
 
+def sigmoid_binarize(M,threshold=0.5):
+    sigmoid = nn.Sigmoid()
+    mask = sigmoid(M)
+    mask_pred = torch.ones_like(mask)
+    for ind in range(M.shape[0]):
+        mask_pred[ind,mask[ind,:]<=threshold] = 0
+    return mask_pred
+
+def rolling_mean(x,window):
+    window = int(window)
+#   y = np.zeros(x.size-window)
+#   for ind in range(y.size):
+#       y[ind] = np.mean(x[ind:ind+window])
+
+    # Stephen: for large data, the above gets a bit slow, so we can do this:
+#   y = np.convolve(x, np.ones(window)/window, mode='valid')
+#   return y
+    # or https://stackoverflow.com/a/27681394
+    cumsum = np.cumsum(np.insert(x, 0, 0))
+    return (cumsum[window:] - cumsum[:-window]) / float(window)
+
 def kplot(y,roll=False,log=False,cmap=None,flip=True):
     '''
     This function plots the reconstructed image.
@@ -278,13 +299,32 @@ def get_x_f_from_yfull(mask,yfull,DTyp=torch.cfloat): # done
     x_f = torch.abs(F.ifftn(z_f,dim=(1,2),norm='ortho'))
     return x_f
 
-def mnet_wrapper(mnet,x_lf,budget,imgshape,dtyp=torch.float): # done
-    if len(x_lf.shape)==3:
-        highmask_raw  = torch.sigmoid( mnet( x_lf.view(x_lf.shape[0],1,imgshape[0],imgshape[1]) ) )   
+def apply_mask(mask,yfull,DTyp=torch.cfloat): # done
+    '''
+    yfull should have dimension (batchsize, Heg, Wid), and is assumed to be a complex image
+    '''
+    if len(mask.shape) == 1:
+        mask = mask.repeat(yfull.shape[0],1)
+    subsamp_z = torch.zeros(yfull.shape).to(DTyp)
+    for ind in range(mask.shape[0]):
+        subsamp_z[ind,mask[ind,:]==1,:] = yfull[ind,mask[ind,:]==1,:]
+        # torch.tensordot( torch.diag(mask[ind,:]).to(DTyp),yfull[ind,:,:],dims=([1],[0]) )
+    z = torch.zeros((subsamp_z.shape[0],2,subsamp_z.shape[1],subsamp_z.shape[2]))
+    z[:,0,:,:] = torch.real(subsamp_z)
+    z[:,1,:,:] = torch.imag(subsamp_z)
+    return z
+
+def mnet_wrapper(mnet,z,budget,imgshape,dtyp=torch.float,normalize=False): # done
+    if len(z.shape)==3:
+        highmask_raw  = torch.sigmoid( mnet( z.view(z.shape[0],1,imgshape[0],imgshape[1]) ) )   
+    elif len(z.shape)==4:
+        highmask_raw  = torch.sigmoid(mnet(z))
+        
+    if normalize:
+        highmask = mask_makebinary( raw_normalize(highmask_raw,budget) , sigma=False )
     else:
-        highmask_raw  = torch.sigmoid(mnet(x_lf))
-    highmask      = mask_makebinary( raw_normalize(highmask_raw,budget) , sigma=False )
-    mnetmask      = mask_complete( highmask,imgshape[0],rolled=True,dtyp=dtyp )
+        highmask = mask_makebinary( highmask_raw , sigma=False )
+    mnetmask = mask_complete( highmask,imgshape[0],rolled=True,dtyp=dtyp )
     return mnetmask
 
 # warmup protocol

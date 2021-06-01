@@ -97,16 +97,16 @@ class MNet(nn.Module):
         self.out_size = out_size
         
         ## network part
-        self.inc   = DoubleConv(in_channels, 64)
-        self.down1 = Down(64, 128,poolk=poolk)
-        self.down2 = Down(128, 256,poolk=poolk)
-        self.down3 = Down(256, 512,poolk=poolk)
-        self.down4 = Down(512, 1024,poolk=poolk)
+        self.inc   = DoubleConv(in_channels, 128)
+        self.down1 = Down(128, 256,poolk=poolk)
+        self.down2 = Down(256, 512,poolk=poolk)
+        self.down3 = Down(512, 1024,poolk=poolk)
+        self.down4 = Down(1024, 2048,poolk=poolk)
         self.outc  = OutConv()
         self.midheg,self.midwid = \
             outsize(*Down_outsize(*Down_outsize(*Down_outsize(*Down_outsize(\
                                                                             *DC_outsize(self.imgHeg,self.imgWid),poolk=poolk),poolk=poolk),poolk=poolk),poolk=poolk),ker=2,stride=2)
-        self.veclen = 1024 * self.midheg * self.midwid
+        self.veclen = 2048 * self.midheg * self.midwid
         lwid1 = self.veclen - ((self.veclen-self.imgHeg)*4)//11
         lwid2 = self.veclen - ((self.veclen-self.imgHeg)*8)//11
         lwid3 = self.veclen - ((self.veclen-self.imgHeg)*10)//11
