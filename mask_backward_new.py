@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 from sigpy.mri.app import TotalVariationRecon
 from utils import mask_complete , mask_makebinary, mask_naiveRand, raw_normalize, get_x_f_from_yfull, apply_mask, sigmoid_binarize
 from solvers import ADMM_TV
+import copy
 
 sys.path.insert(0,'/home/huangz78/mri/unet/')
 from unet_model import UNet
@@ -50,7 +51,7 @@ def mask_eval(fullmask,xstar,\
     for ind in range(batchsize):
         z[ind,fullmask[ind,:]==1,:] = y[ind,fullmask[ind,:]==1,:]
     z = torch.fft.ifftshift(z , dim=(1,2)) 
-    if mode=='UNET':
+    if mode=='UNET' and (UNET is not None):
         if UNET.n_channels == 2:
             zcp = torch.zeros((batchsize,2,imgHeg,imgWid),dtype=dtyp)
             zcp[:,0,:,:] = torch.real(z)
@@ -63,9 +64,9 @@ def mask_eval(fullmask,xstar,\
             x_in = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
             x = UNET(x_in)
         error = nrmse(x,xstar).detach().item()
-    elif mode=='sigpy':       
+    else: # mode is 'sigpy'
         mps = np.ones((1,imgHeg,imgWid))
-        x = np.zeros(y.shape)
+        x   = np.zeros(y.shape)
         for ind in range(batchsize):
             y_tmp = np.reshape(y[ind,:,:].numpy(),(-1,imgHeg,imgWid))
             x[ind,:,:] = np.fft.fftshift( np.abs(TotalVariationRecon(y_tmp, mps, Lambda,show_pbar=False).run()) )    
@@ -77,7 +78,7 @@ def mask_eval(fullmask,xstar,\
 def mask_backward(highmask,xstar,\
                   maxIter=300,seed=0,eps=1.,normalize=True,budget=20,\
                   lr=1e-3,weight_decay=0,momentum=0,\
-                  beta=1, alpha=5e-1,c =.1,\
+                  alpha=5e-1,c =.1,\
                   unet_mode=1,unet=None,mnet=None,\
                   unroll_block=8,Lambda=10**(-6.5),rho=1e2,mode='ADMM',lr_Lambda=1e-8,\
                   break_limit=20,print_every=10,\
@@ -147,16 +148,24 @@ def mask_backward(highmask,xstar,\
             UNET.load_state_dict(checkpoint['model_state_dict'])
             print('Unet loaded successfully from : ' + '/home/huangz78/mri/checkpoints/unet_'+ str(UNET.n_channels) +'.pth' )
             UNET.train()
+#             optimizer = optim.Adam([
+#                     {'params': M_high},
+#                     {'params': UNET.parameters(),'lr':1e-4}
+#                 ], lr=lr, weight_decay=weight_decay)
             optimizer = optim.RMSprop([
                     {'params': M_high},
                     {'params': UNET.parameters(),'lr':1e-4}
                 ], lr=lr, weight_decay=weight_decay, momentum=momentum)
 #             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2)
-            init_mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp) * 100
+            init_mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=unet_eval,dtyp=dtyp) * 100
             print('loss of the input mask: ', init_mask_loss)
         else:
             UNET = unet
             UNET.train()
+#             optimizer = optim.Adam([
+#                     {'params': M_high},
+#                     {'params': UNET.parameters(),'lr':1e-4}
+#                 ], lr=lr, weight_decay=weight_decay)
             optimizer = optim.RMSprop([
                     {'params': M_high},
                     {'params': UNET.parameters(),'lr':1e-4}
@@ -165,7 +174,7 @@ def mask_backward(highmask,xstar,\
     else: # mode is unrolling iterative methods
         optimizer = optim.SGD([M_high],lr=lr)
         print('loss of the input mask: ', mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100)
-#     optimizer = optim.SGD([{'params':M_high,'lr':lr},{'params':Lambda,'lr':lr_Lambda}])
+    unet_eval = copy.deepcopy(UNET); unet_eval.eval()
     repCount = 0; rCount = 0
   
     Iter = 0; loss_old = np.inf; x = None
@@ -186,15 +195,13 @@ def mask_backward(highmask,xstar,\
                 zcp[:,1,:,:] = torch.imag(z)
                 zprime = UNET(zcp)
                 zrecon = zprime[:,0,:,:] + 1j*zprime[:,1,:,:]
-                x = torch.abs(F.ifftn(zrecon,dim=(1,2),norm='ortho'))
+                x      = torch.abs(F.ifftn(zrecon,dim=(1,2),norm='ortho'))
             elif UNET.n_channels == 1:
-                x_ifft = torch.abs( F.ifftn(z,dim=(1,2),norm='ortho') ) 
-                x_in = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
-                x = UNET(x_in)
-                
-        loss = nrmse(x,xstar) + alpha * torch.norm(M_high,p=1) + c * criterion_mnet(M_high.view(mask_pred.shape),mask_pred)
-        ## upper-level loss = nrmse + alpha * ||M||_1 + c * mnet_pred_loss
-        ## the last term is added to enforce consistency between mask_backward and mnet in the iteration process, May 7
+                x_ifft = torch.abs(F.ifftn(z,dim=(1,2),norm='ortho')) 
+                x_in   = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
+                x      = UNET(x_in)
+#         loss = alpha * torch.norm(M_high,p=1) 
+        loss = nrmse(x,xstar) + alpha * torch.norm(M_high,p=1) + c * criterion_mnet(M_high.view(mask_pred.shape),mask_pred) ## upper-level loss = nrmse + alpha * ||M||_1 + c * mnet_pred_loss, where the last term is added to enforce consistency between mask_backward and mnet in the iteration process, May 7
         if loss.item() < loss_old:
             loss_old = loss.item()
             repCount = 0
@@ -203,10 +210,10 @@ def mask_backward(highmask,xstar,\
             if repCount >= break_limit:
                 print('No further decrease in loss after {} consecutive iters, ending iterations~ '.format(repCount))
                 break
-
         optimizer.zero_grad()
         loss.backward()    
-        fullmask_old = mask_makebinary(fullmask.detach().numpy(),threshold=0.5,sigma=False)        
+        fullmask_old = mask_makebinary(fullmask.detach().numpy(),threshold=0.5,sigma=False) 
+        breakpoint()
         optimizer.step()
         M_high = proj_eps(M_high,eps) # soft-hard-thresholding as postprocessing
         fullmask = mask_complete(M_high,imgHeg,dtyp=dtyp)
@@ -215,7 +222,7 @@ def mask_backward(highmask,xstar,\
         ## track training process, and printing information
         #################################
         
-        fullmask_b = mask_makebinary(fullmask.clone().detach(),threshold=0.5,sigma=False)
+        fullmask_b    = mask_makebinary(fullmask.clone().detach(),threshold=0.5,sigma=False)
         mask_sparsity = torch.sum(fullmask_b).item()/(batchsize*imgHeg)
         delta_mask    = fullmask_old-fullmask_b
         added_rows    = torch.sum(delta_mask==-1).item()/batchsize;   reducted_rows= torch.sum(delta_mask==1).item()/batchsize
@@ -238,7 +245,7 @@ def mask_backward(highmask,xstar,\
                     if mode == 'ADMM':
                         mask_loss = mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100
                     elif mode=='UNET':
-                        mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp) * 100
+                        mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=unet_eval,dtyp=dtyp) * 100
                     print('iter: {}, upper level loss: {}\n changed rows in this batch: {}, loss of current mask: {}%'.format(Iter+1,loss,cr_per_batch,mask_loss))
                     print('samp. ratio: {}, Recon. rel. err: {} \n'.format(mask_sparsity,nrmse(x,xstar)) )
                     cr_per_batch = 0
@@ -257,7 +264,7 @@ def mask_backward(highmask,xstar,\
     if mode=='ADMM':
         mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100
     elif mode=='UNET':
-        mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,mode='UNET',UNET=UNET,dtyp=dtyp) * 100
+        mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,mode='UNET',UNET=unet_eval,dtyp=dtyp) * 100
     if verbose:
         print('\nreturn at Iter ind: ', Iter)   
         print(f'loss of returned mask: {mask_loss}%')
