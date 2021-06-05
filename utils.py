@@ -299,7 +299,7 @@ def get_x_f_from_yfull(mask,yfull,DTyp=torch.cfloat): # done
     x_f = torch.abs(F.ifftn(z_f,dim=(1,2),norm='ortho'))
     return x_f
 
-def apply_mask(mask,yfull,DTyp=torch.cfloat): # done
+def apply_mask(mask,yfull,DTyp=torch.cfloat,mode='r'): # done
     '''
     yfull should have dimension (batchsize, Heg, Wid), and is assumed to be a complex image
     '''
@@ -309,10 +309,13 @@ def apply_mask(mask,yfull,DTyp=torch.cfloat): # done
     for ind in range(mask.shape[0]):
         subsamp_z[ind,mask[ind,:]==1,:] = yfull[ind,mask[ind,:]==1,:]
         # torch.tensordot( torch.diag(mask[ind,:]).to(DTyp),yfull[ind,:,:],dims=([1],[0]) )
-    z = torch.zeros((subsamp_z.shape[0],2,subsamp_z.shape[1],subsamp_z.shape[2]))
-    z[:,0,:,:] = torch.real(subsamp_z)
-    z[:,1,:,:] = torch.imag(subsamp_z)
-    return z
+    if mode == 'r':
+        z = torch.zeros((subsamp_z.shape[0],2,subsamp_z.shape[1],subsamp_z.shape[2]))
+        z[:,0,:,:] = torch.real(subsamp_z)
+        z[:,1,:,:] = torch.imag(subsamp_z)
+        return z
+    elif mode == 'c':
+        return subsamp_z
 
 def mnet_wrapper(mnet,z,budget,imgshape,dtyp=torch.float,normalize=False): # done
     if len(z.shape)==3:

@@ -35,7 +35,7 @@ def nrmse(x,xstar):
     
 def mask_eval(fullmask,xstar,\
               mode='UNET',UNET=None,dtyp=torch.float,\
-              Lambda=10**(-6.31),rho=1e1,unroll_block=8): # done
+              Lambda=10**(-4.3)): # done
     '''
     Does the predicted mask work better than the random baseline?
     check method: with respect to a given mask, push them through the same reconstructor, 
@@ -64,21 +64,22 @@ def mask_eval(fullmask,xstar,\
             x_in = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
             x = UNET(x_in)
         error = nrmse(x,xstar).detach().item()
-    else: # mode is 'sigpy'
+    elif mode == 'sigpy': # mode is 'sigpy'
         mps = np.ones((1,imgHeg,imgWid))
-        x   = np.zeros(y.shape)
-        for ind in range(batchsize):
-            y_tmp = np.reshape(y[ind,:,:].numpy(),(-1,imgHeg,imgWid))
-            x[ind,:,:] = np.fft.fftshift( np.abs(TotalVariationRecon(y_tmp, mps, Lambda,show_pbar=False).run()) )    
+        err = np.zeros(batchsize)
         xstar = xstar.numpy()
-        error = np.sqrt( np.sum((x.flatten()-xstar.flatten())**2) )/np.sqrt( np.sum( (xstar.flatten())**2 ))
+        for ind in range(batchsize):
+            y_tmp    = y[ind,:,:].view(-1,imgHeg,imgWid).numpy()
+            x_tmp    = np.fft.ifftshift( np.abs(TotalVariationRecon(y_tmp, mps, Lambda,show_pbar=False).run()) )    
+            err[ind] = np.linalg.norm(x_tmp - xstar[ind,:,:],'fro')/np.linalg.norm(xstar[ind,:,:],'fro')
+        error = np.mean(err)
     return error
 
 
 def mask_backward(highmask,xstar,\
                   maxIter=300,seed=0,eps=1.,normalize=True,budget=20,\
                   lr=1e-3,weight_decay=0,momentum=0,\
-                  alpha=5e-1,c =.1,\
+                  beta=1, alpha=5e-1,c =.1,\
                   unet_mode=1,unet=None,mnet=None,\
                   unroll_block=8,Lambda=10**(-6.5),rho=1e2,mode='ADMM',lr_Lambda=1e-8,\
                   break_limit=20,print_every=10,\
@@ -97,6 +98,7 @@ def mask_backward(highmask,xstar,\
     unroll_block         : how many blocks of solver to unroll, default 3
     lr                   : learning rate to update mask indicator, default 1e-3
     lr_Lambda            : learning rate to update the ADMM parameter Lambda
+    beta                 : the weight for the data fidelity term in the loss function
     alpha                : l1 penalty magnitude when selecting high frequency masks
     c                    : magnitude for consistency term || M - mnet(x_lf) ||_2
     seed                 : random seed, default 0
@@ -155,10 +157,12 @@ def mask_backward(highmask,xstar,\
             optimizer = optim.RMSprop([
                     {'params': M_high},
                     {'params': UNET.parameters(),'lr':1e-4}
-                ], lr=lr, weight_decay=weight_decay, momentum=momentum)
+                ], lr=lr, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
 #             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2)
-            init_mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=unet_eval,dtyp=dtyp) * 100
-            print('loss of the input mask: ', init_mask_loss)
+            if testmode:
+                init_mask_loss = mask_eval(fullmask_b,xstar,mode='sigpy') * 100
+    #             init_mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp) * 100
+                print('loss of the input mask: ', init_mask_loss)
         else:
             UNET = unet
             UNET.train()
@@ -169,12 +173,13 @@ def mask_backward(highmask,xstar,\
             optimizer = optim.RMSprop([
                     {'params': M_high},
                     {'params': UNET.parameters(),'lr':1e-4}
-                ], lr=lr, weight_decay=weight_decay, momentum=momentum)
+                ], lr=lr, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
 #             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2)
     else: # mode is unrolling iterative methods
         optimizer = optim.SGD([M_high],lr=lr)
-        print('loss of the input mask: ', mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100)
-    unet_eval = copy.deepcopy(UNET); unet_eval.eval()
+        if testmode:
+            print('loss of the input mask: ', mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100)
+#     unet_eval = copy.deepcopy(UNET); unet_eval.eval()
     repCount = 0; rCount = 0
   
     Iter = 0; loss_old = np.inf; x = None
@@ -201,7 +206,7 @@ def mask_backward(highmask,xstar,\
                 x_in   = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
                 x      = UNET(x_in)
 #         loss = alpha * torch.norm(M_high,p=1) 
-        loss = nrmse(x,xstar) + alpha * torch.norm(M_high,p=1) + c * criterion_mnet(M_high.view(mask_pred.shape),mask_pred) ## upper-level loss = nrmse + alpha * ||M||_1 + c * mnet_pred_loss, where the last term is added to enforce consistency between mask_backward and mnet in the iteration process, May 7
+        loss = beta * nrmse(x,xstar) + alpha * torch.norm(M_high,p=1) + c * criterion_mnet(M_high.view(mask_pred.shape),mask_pred) ## upper-level loss = nrmse + alpha * ||M||_1 + c * mnet_pred_loss, where the last term is added to enforce consistency between mask_backward and mnet in the iteration process, May 7
         if loss.item() < loss_old:
             loss_old = loss.item()
             repCount = 0
@@ -213,7 +218,6 @@ def mask_backward(highmask,xstar,\
         optimizer.zero_grad()
         loss.backward()    
         fullmask_old = mask_makebinary(fullmask.detach().numpy(),threshold=0.5,sigma=False) 
-        breakpoint()
         optimizer.step()
         M_high = proj_eps(M_high,eps) # soft-hard-thresholding as postprocessing
         fullmask = mask_complete(M_high,imgHeg,dtyp=dtyp)
@@ -237,17 +241,21 @@ def mask_backward(highmask,xstar,\
             print('No change in row selections after {} iters, ending iteration~'.format(rCount))
             break
         if verbose and (changed_rows>0): # if there is any changed rows, then it is reported in every iteration
-            print('Iter {}, rows added: {}, rows reducted: {}'.format(Iter,added_rows,reducted_rows))
+            print('Iter {}, rows added: {}, rows reducted: {}'.format(Iter+1,added_rows,reducted_rows))
         if verbose and (Iter%print_every==0): # every print_every iters, print the quality and sparsity of the current mask
             # or we can print only 10 times: max(maxIter//10,1)
             with torch.no_grad(): ## Validation
                 if (cr_per_batch>0) or (Iter==0): # (changed_rows>0):
-                    if mode == 'ADMM':
-                        mask_loss = mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100
-                    elif mode=='UNET':
-                        mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=unet_eval,dtyp=dtyp) * 100
-                    print('iter: {}, upper level loss: {}\n changed rows in this batch: {}, loss of current mask: {}%'.format(Iter+1,loss,cr_per_batch,mask_loss))
-                    print('samp. ratio: {}, Recon. rel. err: {} \n'.format(mask_sparsity,nrmse(x,xstar)) )
+                    if testmode:
+                        if mode == 'ADMM':
+                            mask_loss = mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100
+                        elif mode=='UNET':
+                            mask_loss = mask_eval(fullmask_b,xstar,mode='sigpy') * 100
+    #                         mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp) * 100
+                        print('iter: {}, upper level loss: {}\n changed rows in this batch: {}, loss of current mask: {}%'.format(Iter+1,loss,cr_per_batch,mask_loss))
+                        print('samp. ratio: {}, Recon. rel. err: {} \n'.format(mask_sparsity,nrmse(x,xstar)) )
+                    else:
+                        print('iter: {}, upper level loss: {}\n changed rows in this batch: {}, loss of current mask: {}%'.format(Iter+1,loss,cr_per_batch))
                     cr_per_batch = 0
 #                     scheduler.step(mask_loss)
                 else:
@@ -261,11 +269,13 @@ def mask_backward(highmask,xstar,\
         M_high = raw_normalize(M_high,budget,threshold=0.5)
     highmask_refined = mask_makebinary(M_high,threshold=0.5,sigma=False)
     
-    if mode=='ADMM':
-        mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100
-    elif mode=='UNET':
-        mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,mode='UNET',UNET=unet_eval,dtyp=dtyp) * 100
-    if verbose:
+    if testmode:
+        if mode=='ADMM':
+            mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100
+        elif mode=='UNET':
+            mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,mode='sigpy') * 100
+    #         mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,mode='UNET',UNET=UNET,dtyp=dtyp) * 100
+    if verbose and testmode:
         print('\nreturn at Iter ind: ', Iter)   
         print(f'loss of returned mask: {mask_loss}%')
         print('samp. ratio: {}, Recon. rel. err: {} \n'.format(mask_sparsity,nrmse(x,xstar)) )
