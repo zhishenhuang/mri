@@ -6,6 +6,7 @@ from torch.nn.functional import relu
 from sklearn.metrics import mean_squared_error as mse
 import torch.fft as F
 from scipy.linalg import circulant
+from scipy import ndimage
 import torch.nn as nn
 
 
@@ -299,13 +300,13 @@ def get_x_f_from_yfull(mask,yfull,DTyp=torch.cfloat): # done
     x_f = torch.abs(F.ifftn(z_f,dim=(1,2),norm='ortho'))
     return x_f
 
-def apply_mask(mask,yfull,DTyp=torch.cfloat,mode='r'): # done
+def apply_mask(mask,yfull,mode='r'): # done
     '''
     yfull should have dimension (batchsize, Heg, Wid), and is assumed to be a complex image
     '''
     if len(mask.shape) == 1:
         mask = mask.repeat(yfull.shape[0],1)
-    subsamp_z = torch.zeros(yfull.shape).to(DTyp)
+    subsamp_z = torch.zeros(yfull.shape).to(yfull.dtype)
     for ind in range(mask.shape[0]):
         subsamp_z[ind,mask[ind,:]==1,:] = yfull[ind,mask[ind,:]==1,:]
         # torch.tensordot( torch.diag(mask[ind,:]).to(DTyp),yfull[ind,:,:],dims=([1],[0]) )
@@ -349,3 +350,31 @@ def mask_pnorm(y,fix=10,other=30,p=2):
     mask     = torch.ones(imgHeg)
     mask[erasInd] = 0
     return mask,maskInd,erasInd
+
+
+def compute_hfen(recon,gt):
+    LoG_GT    = ndimage.gaussian_laplace(np.real(gt), sigma=1)    + 1j*ndimage.gaussian_laplace(np.imag(gt), sigma=1)
+    LoG_recon = ndimage.gaussian_laplace(np.real(recon), sigma=1) + 1j*ndimage.gaussian_laplace(np.imag(recon), sigma=1)
+    return np.linalg.norm(LoG_recon - LoG_GT)/np.linalg.norm(LoG_GT)
+
+# def hfen(x,xstar,base=24):
+#     '''
+#     compute hfen between x and xstar
+#     by default, x.shape = [batchsize,heg,wid]
+#     the input can also be image pairs with shape x.shape = [heg,wid]
+#     '''
+#     assert(x.shape==xstar.shape)
+#     if len(x.shape)==3:
+#         Heg = x.shape[1]
+#         y     = F.fftn(x,dim=(1,2),norm='ortho')
+#         ystar = F.fftn(xstar,dim=(1,2),norm='ortho')
+#         y_high     = y[:,base//2:Heg-1-base//2-base%2,:]
+#         ystar_high = ystar[:,base//2:Heg-1-base//2-base%2,:]
+#         return torch.norm(y_high - ystar_high,'fro')/torch.norm(ystar_high,'fro')
+#     elif len(x.shape)==2:
+#         Heg = x.shape[0]
+#         y     = F.fftn(x,dim=(0,1),norm='ortho')
+#         ystar = F.fftn(xstar,dim=(0,1),norm='ortho')
+#         y_high     = y[base//2:Heg-1-base//2-base%2,:]
+#         ystar_high = ystar[base//2:Heg-1-base//2-base%2,:]
+#         return torch.norm(y_high - ystar_high,'fro')/torch.norm(ystar_high,'fro')

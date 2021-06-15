@@ -13,7 +13,7 @@ import utils
 import logging
 import matplotlib.pyplot as plt
 from sigpy.mri.app import TotalVariationRecon
-from utils import mask_complete , mask_makebinary, mask_naiveRand, raw_normalize, get_x_f_from_yfull, apply_mask, sigmoid_binarize
+from utils import mask_complete , mask_makebinary, mask_naiveRand, raw_normalize, get_x_f_from_yfull, apply_mask, sigmoid_binarize, compute_hfen
 from solvers import ADMM_TV
 import copy
 
@@ -35,7 +35,7 @@ def nrmse(x,xstar):
     
 def mask_eval(fullmask,xstar,\
               mode='UNET',UNET=None,dtyp=torch.float,\
-              Lambda=10**(-4.3)): # done
+              Lambda=10**(-4.3),hfen=False): # done
     '''
     Does the predicted mask work better than the random baseline?
     check method: with respect to a given mask, push them through the same reconstructor, 
@@ -49,9 +49,9 @@ def mask_eval(fullmask,xstar,\
     y = torch.fft.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho'),dim=(1,2))    
     z = torch.zeros(y.shape).to(y.dtype)
     for ind in range(batchsize):
-        z[ind,fullmask[ind,:]==1,:] = y[ind,fullmask[ind,:]==1,:]
-    z = torch.fft.ifftshift(z , dim=(1,2)) 
+        z[ind,fullmask[ind,:]==1,:] = y[ind,fullmask[ind,:]==1,:]   
     if mode=='UNET' and (UNET is not None):
+        z = torch.fft.ifftshift(z , dim=(1,2)) 
         if UNET.n_channels == 2:
             zcp = torch.zeros((batchsize,2,imgHeg,imgWid),dtype=dtyp)
             zcp[:,0,:,:] = torch.real(z)
@@ -63,16 +63,28 @@ def mask_eval(fullmask,xstar,\
             x_ifft = torch.abs( F.ifftn(z,dim=(1,2),norm='ortho') ) 
             x_in = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
             x = UNET(x_in)
-        error = nrmse(x,xstar).detach().item()
+        if hfen:
+            hfens = np.zeros(batchsize)
+            for ind in range(batchsize):
+                hfens = compute_hfen(x[ind,0,:,:],xstar[ind,:,:])
+            error = (nrmse(x,xstar).detach().item(),np.mean(hfens))
+        else:
+            error = nrmse(x,xstar).detach().item()
     elif mode == 'sigpy': # mode is 'sigpy'
         mps = np.ones((1,imgHeg,imgWid))
         err = np.zeros(batchsize)
+        hfens = np.zeros(batchsize)
         xstar = xstar.numpy()
         for ind in range(batchsize):
-            y_tmp    = y[ind,:,:].view(-1,imgHeg,imgWid).numpy()
-            x_tmp    = np.fft.ifftshift( np.abs(TotalVariationRecon(y_tmp, mps, Lambda,show_pbar=False).run()) )    
+            y_tmp    = z[ind,:,:].view(-1,imgHeg,imgWid).numpy()
+            x_tmp    = np.fft.ifftshift( np.abs(TotalVariationRecon(y_tmp, mps, Lambda,show_pbar=False).run()) )  
             err[ind] = np.linalg.norm(x_tmp - xstar[ind,:,:],'fro')/np.linalg.norm(xstar[ind,:,:],'fro')
-        error = np.mean(err)
+            if hfen:
+                hfens[ind] = compute_hfen(x_tmp,xstar[ind,:,:])  
+        if hfen:
+            error = (np.mean(err),np.mean(hfens))
+        else:
+            error = np.mean(err)
     return error
 
 
@@ -83,7 +95,7 @@ def mask_backward(highmask,xstar,\
                   unet_mode=1,unet=None,mnet=None,\
                   unroll_block=8,Lambda=10**(-6.5),rho=1e2,mode='ADMM',lr_Lambda=1e-8,\
                   break_limit=20,print_every=10,\
-                  verbose=False,save_cp=False,dtyp=torch.float,testmode=False):
+                  verbose=False,save_cp=False,dtyp=torch.float,testmode=None,hfen=False):
     '''
     The purpose of this function is to update mask choice (particularly for high frequency) via backward propagation. 
     The input is one image, the known base ratio and the currently employed high frequency mask for the input image.
@@ -159,9 +171,11 @@ def mask_backward(highmask,xstar,\
                     {'params': UNET.parameters(),'lr':1e-4}
                 ], lr=lr, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
 #             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2)
-            if testmode:
-                init_mask_loss = mask_eval(fullmask_b,xstar,mode='sigpy') * 100
-    #             init_mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp) * 100
+            if testmode=='UNET':
+                init_mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen)
+            elif testmode == 'sigpy':
+                init_mask_loss = mask_eval(fullmask_b,xstar,mode='sigpy',hfen=hfen)
+            if testmode is not None:
                 print('loss of the input mask: ', init_mask_loss)
         else:
             UNET = unet
@@ -175,11 +189,11 @@ def mask_backward(highmask,xstar,\
                     {'params': UNET.parameters(),'lr':1e-4}
                 ], lr=lr, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
 #             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2)
-    else: # mode is unrolling iterative methods
-        optimizer = optim.SGD([M_high],lr=lr)
-        if testmode:
-            print('loss of the input mask: ', mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100)
-#     unet_eval = copy.deepcopy(UNET); unet_eval.eval()
+#     else: # mode is unrolling iterative methods
+#         optimizer = optim.SGD([M_high],lr=lr)
+#         if testmode=='ADMM':
+#             print('loss of the input mask: ', mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) )
+# #     unet_eval = copy.deepcopy(UNET); unet_eval.eval()
     repCount = 0; rCount = 0
   
     Iter = 0; loss_old = np.inf; x = None
@@ -190,8 +204,8 @@ def mask_backward(highmask,xstar,\
             z[ind,:,:] = torch.tensordot( torch.diag(fullmask[ind,:]).to(y.dtype),y[ind,:,:],dims=([1],[0]) )
         z = torch.fft.ifftshift(z , dim=(1,2)) 
         ## Reconstruction process
-        if mode == 'ADMM':
-            x   = ADMM_TV(z,fullmask,maxIter=unroll_block,Lambda=Lambda,rho=rho,imgInput=False,x_init=None)
+#         if mode == 'ADMM':
+#             x   = ADMM_TV(z,fullmask,maxIter=unroll_block,Lambda=Lambda,rho=rho,imgInput=False,x_init=None)
 #             x = learnable_unrolled_algo(z,fullmask) # maybe PDHG
         if mode == 'UNET':
             if UNET.n_channels == 2:
@@ -242,24 +256,25 @@ def mask_backward(highmask,xstar,\
             break
         if verbose and (changed_rows>0): # if there is any changed rows, then it is reported in every iteration
             print('Iter {}, rows added: {}, rows reducted: {}'.format(Iter+1,added_rows,reducted_rows))
-        if verbose and (Iter%print_every==0): # every print_every iters, print the quality and sparsity of the current mask
-            # or we can print only 10 times: max(maxIter//10,1)
-            with torch.no_grad(): ## Validation
-                if (cr_per_batch>0) or (Iter==0): # (changed_rows>0):
-                    if testmode:
-                        if mode == 'ADMM':
-                            mask_loss = mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100
-                        elif mode=='UNET':
-                            mask_loss = mask_eval(fullmask_b,xstar,mode='sigpy') * 100
-    #                         mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp) * 100
-                        print('iter: {}, upper level loss: {}\n changed rows in this batch: {}, loss of current mask: {}%'.format(Iter+1,loss,cr_per_batch,mask_loss))
-                        print('samp. ratio: {}, Recon. rel. err: {} \n'.format(mask_sparsity,nrmse(x,xstar)) )
-                    else:
-                        print('iter: {}, upper level loss: {}\n changed rows in this batch: {}, loss of current mask: {}%'.format(Iter+1,loss,cr_per_batch))
-                    cr_per_batch = 0
-#                     scheduler.step(mask_loss)
-                else:
-                    print('iter: {}, upper level loss: {}'.format(Iter+1,loss))                   
+#         if verbose and (Iter%print_every==0): # every print_every iters, print the quality and sparsity of the current mask
+#             # or we can print only 10 times: max(maxIter//10,1)
+#             with torch.no_grad(): ## Validation
+#                 if (cr_per_batch>0) or (Iter==0): # (changed_rows>0):
+# #                     if testmode == 'ADMM':
+# #                         mask_loss = mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp)
+#                     if testmode=='UNET':
+#                         mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen)
+#                     elif testmode=='sigpy':
+#                         mask_loss = mask_eval(fullmask_b,xstar,mode='sigpy',hfen=hfen)
+#                     if testmode is not None:
+#                         print('iter: {}, upper level loss: {}\n changed rows in this batch: {}, loss of current mask: {}'.format(Iter+1,loss,cr_per_batch,mask_loss))
+#                         print('samp. ratio: {}, Recon. rel. err: {} \n'.format(mask_sparsity,nrmse(x,xstar)) )
+#                     else:
+#                         print('iter: {}, upper level loss: {}\n changed rows in this batch: {}'.format(Iter+1,loss,cr_per_batch))
+#                     cr_per_batch = 0
+# #                     scheduler.step(mask_loss)
+#                 else:
+#                     print('iter: {}, upper level loss: {}'.format(Iter+1,loss))                   
         if save_cp and (Iter%max(maxIter//10,1))==0:
             dir_checkpoint = '/home/huangz78/mri/checkpoints/'
             torch.save({'model_state_dict': UNET.state_dict()}, dir_checkpoint + 'unet_'+ str(UNET.n_channels) +'_by_mask.pth')
@@ -269,18 +284,18 @@ def mask_backward(highmask,xstar,\
         M_high = raw_normalize(M_high,budget,threshold=0.5)
     highmask_refined = mask_makebinary(M_high,threshold=0.5,sigma=False)
     
-    if testmode:
-        if mode=='ADMM':
-            mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) * 100
-        elif mode=='UNET':
-            mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,mode='sigpy') * 100
-    #         mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,mode='UNET',UNET=UNET,dtyp=dtyp) * 100
-    if verbose and testmode:
+#     if testmode=='ADMM':
+#             mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp)
+    if testmode=='UNET':
+        mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen)
+    elif testmode == 'sigpy':
+        mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,mode='sigpy',hfen=hfen)
+    if verbose and (testmode is not None):
         print('\nreturn at Iter ind: ', Iter)   
-        print(f'loss of returned mask: {mask_loss}%')
+        print(f'loss of returned mask: {mask_loss}')
         print('samp. ratio: {}, Recon. rel. err: {} \n'.format(mask_sparsity,nrmse(x,xstar)) )
     
-    if testmode:
+    if testmode is not None:
         return mask_loss, mask_sparsity
     else:
         if unet is None:
