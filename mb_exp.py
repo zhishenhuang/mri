@@ -32,7 +32,6 @@ if __name__ == '__main__':
     imgNum = imgs.shape[0]
     traininds, testinds = train_test_split(np.arange(imgNum),random_state=0,shuffle=True,train_size=round(imgNum*0.8))
 
-
     ### load a mnet
     from mnet import MNet
     # mnet = MNet(out_size=320-24)
@@ -42,19 +41,6 @@ if __name__ == '__main__':
     mnet.load_state_dict(checkpoint['model_state_dict'])
     print('MNet loaded successfully from: ' + mnetpath)
     mnet.eval()
-
-    ### load a unet for maskbackward
-    UNET = UNet(n_channels=1,n_classes=1,bilinear=True,skip=False)
-    # unetpath = '/home/huangz78/checkpoints/unet_'+ str(UNET.n_channels) +'.pth'
-    unetpath = '/home/huangz78/checkpoints/unet_1_False.pth'
-
-    # UNET = UNet(n_channels=1,n_classes=1,bilinear=False,skip=True)
-    # unetpath = '/home/huangz78/checkpoints/unet_1_True.pth'
-    checkpoint = torch.load(unetpath)
-    UNET.load_state_dict(checkpoint['model_state_dict'])
-    print('Unet loaded successfully from: ' + unetpath )
-    UNET.train()
-    print('nn\'s are ready')
 
     # batchsize = 5
     # xstar = xfull[0:batchsize,:,:]
@@ -79,7 +65,8 @@ if __name__ == '__main__':
     # highmask = sigmoid_binarize(mnet(x_lf.view(batchsize,1,xstar.shape[1],xstar.shape[2])))
 
     NN         = 10
-    alpha_grid = 10**(np.linspace(-5.5,-3,NN))
+#     alpha_grid = 10**(np.linspace(-5.5,-3.5,NN))
+    alpha_grid = 10**(np.linspace(-8,-5,NN))
     c_grid     = np.array([1e-4,1e-3,1e-2,1e-1,1e0])
     l2loss   = np.zeros((NN,5))
     hfen = np.zeros((NN,5))
@@ -101,16 +88,14 @@ if __name__ == '__main__':
             print(f'alpha_ind {a_ind+1} out of {len(alpha_grid)}')
             print(f'c={c} and alpha={alpha}')
             # load a unet for maskbackward
-            UNET = UNet(n_channels=1,n_classes=1,bilinear=True,skip=False)
-            unetpath = '/home/huangz78/checkpoints/unet_1_False.pth'
+#             UNET = UNet(n_channels=1,n_classes=1,bilinear=True,skip=False)   # Jun 15
+#             unetpath = '/home/huangz78/checkpoints/unet_1_False.pth'
+            UNET = UNet(n_channels=1,n_classes=1,bilinear=False,skip=True) # Jun 17
+            unetpath = '/home/huangz78/checkpoints/unet_1_True.pth'
             checkpoint = torch.load(unetpath)
             UNET.load_state_dict(checkpoint['model_state_dict'])
             UNET.train()
-        # highmask_refined,unet = mask_backward(highmask,xstar,unet=UNET, mnet=mnet,\
-        #                   beta=1.,alpha=alpha,c=c,\
-        #                   maxIter=maxIter_mb,seed=0,break_limit=maxIter_mb*3//5,\
-        #                   lr=lr_mb,mode='UNET',budget=budget,normalize=False,\
-        #                   verbose=True,dtyp=torch.float)
+
             (l2loss[a_ind,c_ind],hfen[a_ind,c_ind]),sparsity[a_ind,c_ind] =\
                             mask_backward(highmask,xstar,unet=UNET, mnet=mnet,\
                               beta=1.,alpha=alpha,c=c,\
@@ -120,4 +105,4 @@ if __name__ == '__main__':
             a_ind += 1
         print('\n')
         c_ind += 1
-        np.savez('home/huangz78/checkpoints/mb_rec.npz',l2loss=l2loss,hfen=hfen,sparsity=sparsity)
+        np.savez('/home/huangz78/checkpoints/mb_rec.npz',l2loss=l2loss,hfen=hfen,sparsity=sparsity)
