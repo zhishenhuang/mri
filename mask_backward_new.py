@@ -37,6 +37,8 @@ def mask_eval(fullmask,xstar,\
               mode='UNET',UNET=None,dtyp=torch.float,\
               Lambda=10**(-4.3),hfen=False): # done
     '''
+    The input mask is assumed to be rolled.
+    
     Does the predicted mask work better than the random baseline?
     check method: with respect to a given mask, push them through the same reconstructor, 
                   compare the reconstructed image in l2 norm
@@ -89,13 +91,14 @@ def mask_eval(fullmask,xstar,\
 
 
 def mask_backward(highmask,xstar,\
-                  maxIter=300,seed=0,eps=1.,normalize=True,budget=20,\
+                  maxIter=300,seed=0,eps=1.,normalize=True,\
+                  budget=20,\
                   lr=1e-3,weight_decay=0,momentum=0,\
                   beta=1, alpha=5e-1,c =.1,\
-                  unet_mode=1,unet=None,mnet=None,\
-                  unroll_block=8,Lambda=10**(-6.5),rho=1e2,mode='ADMM',lr_Lambda=1e-8,\
-                  break_limit=20,print_every=10,\
-                  verbose=False,save_cp=False,dtyp=torch.float,testmode=None,hfen=False):
+                  mode='UNET',unet_mode=1,unet=None,mnet=None,\
+                  break_limit=np.inf,print_every=10,\
+                  verbose=False,save_cp=False,dtyp=torch.float,\
+                  testmode=None,hfen=False,return_loss_only=False):
     '''
     The purpose of this function is to update mask choice (particularly for high frequency) via backward propagation. 
     The input is one image, the known base ratio and the currently employed high frequency mask for the input image.
@@ -122,9 +125,9 @@ def mask_backward(highmask,xstar,\
     -- disabled args
     perturb              : flag to inject noise into gradients when update the mask, currently disabled!
     perturb_freq         : how frequently to inject noise, currently disabled!
-    
-    
+      
     May 18: need to make xstar as a batch because BatchNorm2d will render batchsize=1 constantly zero.
+    arxived inputs       : unroll_block=8,Lambda=10**(-6.5),rho=1e2,lr_Lambda=1e-8
     '''
     torch.manual_seed(seed)
     batchsize,imgHeg,imgWid = xstar.shape[0],xstar.shape[1],xstar.shape[2]
@@ -171,12 +174,6 @@ def mask_backward(highmask,xstar,\
                     {'params': UNET.parameters(),'lr':1e-4}
                 ], lr=lr, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
 #             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2)
-            if testmode=='UNET':
-                init_mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen)
-            elif testmode == 'sigpy':
-                init_mask_loss = mask_eval(fullmask_b,xstar,mode='sigpy',hfen=hfen)
-            if testmode is not None:
-                print('loss of the input mask: ', init_mask_loss)
         else:
             UNET = unet
             UNET.train()
@@ -194,6 +191,12 @@ def mask_backward(highmask,xstar,\
 #         if testmode=='ADMM':
 #             print('loss of the input mask: ', mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) )
 # #     unet_eval = copy.deepcopy(UNET); unet_eval.eval()
+    if testmode=='UNET':
+        init_mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen)
+    elif testmode == 'sigpy':
+        init_mask_loss = mask_eval(fullmask_b,xstar,mode='sigpy',hfen=hfen)
+    if (testmode is not None) and verbose:
+        print('loss of the input mask: ', init_mask_loss)
     repCount = 0; rCount = 0
   
     Iter = 0; loss_old = np.inf; x = None
@@ -295,11 +298,11 @@ def mask_backward(highmask,xstar,\
         print(f'loss of returned mask: {mask_loss}')
         print('samp. ratio: {}, Recon. rel. err: {} \n'.format(mask_sparsity,nrmse(x,xstar)) )
     
-    if testmode is not None:
+    if return_loss_only:
         return mask_loss, mask_sparsity
     else:
         if unet is None:
             return highmask_refined, mask_loss, init_mask_loss
         else:
-            return highmask_refined, UNET
+            return highmask_refined, UNET, mask_loss, init_mask_loss
 
