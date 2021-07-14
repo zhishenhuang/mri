@@ -118,11 +118,11 @@ class LineConstrainedProbMask(nn.Module):
         """
         logits = self.mask
         mask   = torch.sigmoid(self.slope * logits).view(1, 1, self.mask.shape[0], 1) 
-
         if self.preselect:
             if self.preselect_num % 2 == 0:
                 zeros = torch.zeros(1, 1, self.preselect_num // 2, 1).to(input.device) 
-                mask  = torch.cat([zeros, mask, zeros], dim=2)
+                mask = torch.cat([zeros, mask, zeros], dim=2)
+                mask.retain_grad()
             else:
                 raise NotImplementedError()
 
@@ -166,26 +166,24 @@ class LOUPESampler(nn.Module):
         return entropy
 
     def forward(self, kspace, sparsity):
-        # kspace: NHWC
+        # kspace: NCHW
         # sparsity (float)
         prob_mask = self.gen_mask(kspace)
         if self.preselect:
-            rescaled_mask  = self.rescale(prob_mask, sparsity - self.preselect_num/self.shape[0])
+            rescaled_mask = self.rescale(prob_mask, sparsity - self.preselect_num/self.shape[0])
         else:
-            rescaled_mask  = self.rescale(prob_mask, sparsity)
-        breakpoint()
-        binarized_mask = self.binarize(rescaled_mask)
+            rescaled_mask = self.rescale(prob_mask, sparsity)
 
+        binarized_mask = self.binarize(rescaled_mask)
         binarized_mask[..., :self.preselect_num_one_side , :] = 1  # wrt unrolled masks
-        binarized_mask[..., -self.preselect_num_one_side:, :] = 1 
+        binarized_mask[..., -self.preselect_num_one_side:, :] = 1
+        binarized_mask.retain_grad()
 
 #         neg_entropy = self._mask_neg_entropy(rescaled_mask)
-
 #         masked_kspace = binarized_mask * kspace
-        binarized_mask = torch.squeeze(binarized_mask)
-        masked_kspace = torch.clone(kspace)
-        masked_kspace[:,:,binarized_mask==0,:] = 0
-
+        binarized_mask = torch.tile(torch.tile(binarized_mask,(1,1,1,self.shape[1])),(kspace.shape[0],1,1,1))
+#         kspace[:,:,binarized_mask==0,:] = 0
+        masked_kspace  = torch.mul(binarized_mask , kspace) 
 #         data_to_vis_sampler = {'prob_mask': transforms.fftshift(prob_mask[0,:,:,0],dim=(0,1)).cpu().detach().numpy(), 
 #                                'rescaled_mask': transforms.fftshift(rescaled_mask[0,:,:,0],dim=(0,1)).cpu().detach().numpy(), 
 #                                'binarized_mask': transforms.fftshift(binarized_mask[0,:,:,0],dim=(0,1)).cpu().detach().numpy()}

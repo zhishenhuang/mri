@@ -8,6 +8,7 @@ import torch.fft as F
 from scipy.linalg import circulant
 from scipy import ndimage
 import torch.nn as nn
+import skimage
 
 
 # Jan 24, removed W1, W2, W1T, W2T
@@ -103,6 +104,8 @@ def kplot(y,roll=False,log=False,cmap=None,flip=True):
         plt.show()
     elif len(yshape)==1: # mask
         fig,axs = plt.subplots(1,1,figsize=(5, 5))
+        if roll:
+            y = np.roll(y,yshape[0]//2,axis=0)
         mask    = np.reshape(y,(-1,1))
         mask2D  = np.tile(mask,(1,mask.size))
         if flip:
@@ -209,6 +212,7 @@ def mask_naiveRand(imgHeg,fix=10,other=30,roll=False):
 
 def mask_makebinary(M,beta=1,threshold=0.5,sigma=True): # done
     '''
+    M: [#imgs, mask_dimension], e.g. [5 imgs, 320 lines in fullmask]
     return a mask in the form of binary vector
     threshold the continuous mask into a binary mask
     '''
@@ -223,6 +227,7 @@ def mask_makebinary(M,beta=1,threshold=0.5,sigma=True): # done
 
 def mask_complete(highmask,imgHeg,rolled=True,dtyp=torch.float): # done
     '''
+    highmask: [#imgs, mask_dimension], e.g. [5 imgs, 296 lines in highmask]
     mold the highmask into a complete full length mask
     fill observed low frequency with 1
     '''
@@ -264,7 +269,7 @@ def mask_filter(M,base=10,roll=False): # done
 
 def raw_normalize(M,budget,threshold=0.5): # done
     '''
-    M: full mask 
+    M: full mask with shape [#images, imgHeg]
     budget: how many frequencies to sample
     threshold: deafult 0.5
     to be applied after sigmoid but before binarize!
@@ -320,9 +325,9 @@ def apply_mask(mask,yfull,mode='r'): # done
 
 def mnet_wrapper(mnet,z,budget,imgshape,dtyp=torch.float,normalize=False): # done
     if len(z.shape)==3:
-        highmask_raw  = torch.sigmoid( mnet( z.view(z.shape[0],1,imgshape[0],imgshape[1]) ) )   
+        highmask_raw  = torch.sigmoid( mnet( z.view(z.shape[0],mnet.in_channels,imgshape[0],imgshape[1]) ) )   
     elif len(z.shape)==4:
-        highmask_raw  = torch.sigmoid(mnet(z))
+        highmask_raw  = torch.sigmoid( mnet(z) )
         
     if normalize:
         highmask = mask_makebinary( raw_normalize(highmask_raw,budget) , sigma=False )
@@ -356,6 +361,29 @@ def compute_hfen(recon,gt):
     LoG_GT    = ndimage.gaussian_laplace(np.real(gt), sigma=1)    + 1j*ndimage.gaussian_laplace(np.imag(gt), sigma=1)
     LoG_recon = ndimage.gaussian_laplace(np.real(recon), sigma=1) + 1j*ndimage.gaussian_laplace(np.imag(recon), sigma=1)
     return np.linalg.norm(LoG_recon - LoG_GT)/np.linalg.norm(LoG_GT)
+
+def compute_ssim(xs: torch.Tensor, ys: torch.Tensor) -> np.ndarray:
+    ssims = []
+    for i in range(xs.shape[0]):
+        ssim = skimage.metrics.structural_similarity(
+            xs[i].cpu().numpy(),
+            ys[i].cpu().numpy(),
+            data_range=ys[i].cpu().numpy().max(),
+        )
+        ssims.append(ssim)
+    return np.array(ssims, dtype=np.float32)
+
+
+def compute_psnr(xs: torch.Tensor, ys: torch.Tensor) -> np.ndarray:
+    psnrs = []
+    for i in range(xs.shape[0]):
+        psnr = skimage.metrics.peak_signal_noise_ratio(
+            xs[i].cpu().numpy(),
+            ys[i].cpu().numpy(),
+            data_range=ys[i].cpu().numpy().max(),
+        )
+        psnrs.append(psnr)
+    return np.array(psnrs, dtype=np.float32)
 
 # def hfen(x,xstar,base=24):
 #     '''

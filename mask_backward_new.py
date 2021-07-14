@@ -137,7 +137,7 @@ def mask_backward(highmask,xstar,\
         highmask = torch.tensor(highmask,dtype=dtyp)
     for layer in range(batchsize):
         xstar[layer,:,:] = xstar[layer,:,:]/torch.max(torch.abs(xstar[layer,:,:].flatten()))
-    y = torch.fft.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho'),dim=(1,2))
+    y = F.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho'),dim=(1,2))
     
     corefreq = imgHeg - highmask.shape[1]
     lowfreqmask,_,_ = mask_naiveRand(imgHeg,fix=corefreq,other=0,roll=True)
@@ -191,21 +191,22 @@ def mask_backward(highmask,xstar,\
 #         if testmode=='ADMM':
 #             print('loss of the input mask: ', mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) )
 # #     unet_eval = copy.deepcopy(UNET); unet_eval.eval()
+
     if testmode=='UNET':
         init_mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen)
     elif testmode == 'sigpy':
         init_mask_loss = mask_eval(fullmask_b,xstar,mode='sigpy',hfen=hfen)
     if (testmode is not None) and verbose:
         print('loss of the input mask: ', init_mask_loss)
+
     repCount = 0; rCount = 0
-  
     Iter = 0; loss_old = np.inf; x = None
     cr_per_batch = 0
     while Iter < maxIter:
         z = torch.zeros(y.shape).to(y.dtype)
         for ind in range(batchsize):
             z[ind,:,:] = torch.tensordot( torch.diag(fullmask[ind,:]).to(y.dtype),y[ind,:,:],dims=([1],[0]) )
-        z = torch.fft.ifftshift(z , dim=(1,2)) 
+        z = F.ifftshift(z , dim=(1,2)) 
         ## Reconstruction process
 #         if mode == 'ADMM':
 #             x   = ADMM_TV(z,fullmask,maxIter=unroll_block,Lambda=Lambda,rho=rho,imgInput=False,x_init=None)
@@ -222,8 +223,12 @@ def mask_backward(highmask,xstar,\
                 x_ifft = torch.abs(F.ifftn(z,dim=(1,2),norm='ortho')) 
                 x_in   = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
                 x      = UNET(x_in)
+                
 #         loss = alpha * torch.norm(M_high,p=1) 
-        loss = beta * nrmse(x,xstar) + alpha * torch.norm(M_high,p=1) + c * criterion_mnet(M_high.view(mask_pred.shape),mask_pred) ## upper-level loss = nrmse + alpha * ||M||_1 + c * mnet_pred_loss, where the last term is added to enforce consistency between mask_backward and mnet in the iteration process, May 7
+        loss = beta * nrmse(x,xstar) + alpha * torch.norm(M_high,p=1) + c * criterion_mnet(M_high.view(mask_pred.shape),mask_pred) 
+    ## upper-level loss = nrmse + alpha * ||Mask_actual||_1 + c * mnet_pred_loss, where the last term is added to enforce consistency between mask_backward and mnet in the iteration process, May 7
+    ## Jul 13, torch.norm( sigmoid(M_high), p=1 ) --> unnecessary, because M_high is in [0,1].
+    
         if loss.item() < loss_old:
             loss_old = loss.item()
             repCount = 0
@@ -241,11 +246,10 @@ def mask_backward(highmask,xstar,\
         
         #################################
         ## track training process, and printing information
-        #################################
-        
+        #################################       
         fullmask_b    = mask_makebinary(fullmask.clone().detach(),threshold=0.5,sigma=False)
         mask_sparsity = torch.sum(fullmask_b).item()/(batchsize*imgHeg)
-        delta_mask    = fullmask_old-fullmask_b
+        delta_mask    = fullmask_old - fullmask_b
         added_rows    = torch.sum(delta_mask==-1).item()/batchsize;   reducted_rows= torch.sum(delta_mask==1).item()/batchsize
         changed_rows  = torch.abs(delta_mask).sum().item()/batchsize
         cr_per_batch += changed_rows
