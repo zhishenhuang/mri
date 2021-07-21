@@ -17,7 +17,7 @@ import copy
 from utils import kplot,mask_naiveRand,mask_filter, get_x_f_from_yfull, mnet_wrapper
 from utils import mask_complete, mask_makebinary,raw_normalize, visualization
 from mnet import MNet
-from mask_backward_new import mask_backward, mask_eval
+from mask_backward_v1 import mask_backward, mask_eval
 sys.path.insert(0,'/home/huangz78/mri/unet/')
 from unet_model import UNet
 

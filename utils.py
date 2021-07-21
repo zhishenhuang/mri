@@ -9,6 +9,8 @@ from scipy.linalg import circulant
 from scipy import ndimage
 import torch.nn as nn
 import skimage
+from skimage.metrics import structural_similarity as ss
+from skimage.metrics import peak_signal_noise_ratio as psnr_
 
 
 # Jan 24, removed W1, W2, W1T, W2T
@@ -115,7 +117,8 @@ def kplot(y,roll=False,log=False,cmap=None,flip=True):
         axs.set_xticks([])
         axs.set_xticks([], minor=True) # for minor ticks
         axs.set_ylabel('Frequencies')
-        plt.colorbar(hd1,ax=axs)
+        if not flip:
+            plt.colorbar(hd1,ax=axs)
         plt.rcParams.update({'font.size': 25})
         plt.show()
         
@@ -232,7 +235,7 @@ def mask_complete(highmask,imgHeg,rolled=True,dtyp=torch.float): # done
     fill observed low frequency with 1
     '''
     layer = highmask.shape[0]
-    base = imgHeg - highmask.size()[1]
+    base  = imgHeg - highmask.size()[1]
     fullmask = torch.zeros((layer,imgHeg),dtype=dtyp)
     if rolled:
         coreInds = np.arange(int(imgHeg/2)-int(base/2), int(imgHeg/2)+int(base/2))
@@ -323,11 +326,14 @@ def apply_mask(mask,yfull,mode='r'): # done
     elif mode == 'c':
         return subsamp_z
 
-def mnet_wrapper(mnet,z,budget,imgshape,dtyp=torch.float,normalize=False): # done
+def mnet_wrapper(mnet,z,budget,imgshape,dtyp=torch.float,normalize=False,detach=False): # done
     if len(z.shape)==3:
         highmask_raw  = torch.sigmoid( mnet( z.view(z.shape[0],mnet.in_channels,imgshape[0],imgshape[1]) ) )   
     elif len(z.shape)==4:
         highmask_raw  = torch.sigmoid( mnet(z) )
+    
+    if detach:
+        highmask_raw = highmask_raw.detach()
         
     if normalize:
         highmask = mask_makebinary( raw_normalize(highmask_raw,budget) , sigma=False )
@@ -365,7 +371,7 @@ def compute_hfen(recon,gt):
 def compute_ssim(xs: torch.Tensor, ys: torch.Tensor) -> np.ndarray:
     ssims = []
     for i in range(xs.shape[0]):
-        ssim = skimage.metrics.structural_similarity(
+        ssim = ss(
             xs[i].cpu().numpy(),
             ys[i].cpu().numpy(),
             data_range=ys[i].cpu().numpy().max(),
@@ -377,7 +383,7 @@ def compute_ssim(xs: torch.Tensor, ys: torch.Tensor) -> np.ndarray:
 def compute_psnr(xs: torch.Tensor, ys: torch.Tensor) -> np.ndarray:
     psnrs = []
     for i in range(xs.shape[0]):
-        psnr = skimage.metrics.peak_signal_noise_ratio(
+        psnr = psnr_(
             xs[i].cpu().numpy(),
             ys[i].cpu().numpy(),
             data_range=ys[i].cpu().numpy().max(),

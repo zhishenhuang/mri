@@ -45,7 +45,7 @@ def loupeTrain(traindata,valdata,\
                unet_skip=True, n_channels=1,\
                lrm=1e-3, lru=1e-4, weight_decay=0, momentum=0,\
                epochs=1, batchsize_train=5, batchsize_val=2, count_start=(0,0),\
-               modelpath=None,\
+               modelpath=None,histpath=None,\
                save_cp=True):
     
     '''
@@ -68,10 +68,17 @@ def loupeTrain(traindata,valdata,\
     if modelpath is not None:
         checkpoint = torch.load(modelpath)
         loupe.load_state_dict(checkpoint['model_state_dict'])
+        print('loupe model successfully loaded from the path: ', modelpath)
     loupe.train()
     
     # training
-    train_loss = []; val_loss = []
+    if histpath is None:
+        train_loss = []; val_loss = []
+    else:
+        histRec    = np.load(histpath)
+        train_loss = list(histRec['loss_train'])
+        val_loss   = list(histRec['loss_val'])
+        print('training history file successfully loaded from the path: ', histpath)
     epoch_count = count_start[0];  batchind = count_start[1]
     batch_nums  = int(np.ceil(traindata.shape[0]/batchsize_train))
     
@@ -87,7 +94,7 @@ def loupeTrain(traindata,valdata,\
                 databatch = normalize_data(traindata[batch,:,:]) if len(batch)>1 else normalize_data(traindata[batch,:,:].view(-1,shape[0],shape[1]))
                 xstar = traindata[batch,:,:].view(batch.shape[0],-1,shape[0],shape[1])
                 ystar = F.fftn(xstar,dim=(2,3),norm='ortho')
-                x_recon = loupe(ystar)
+                x_recon,_ = loupe(ystar)
 
                 loss_train = criterion(x_recon,xstar)
                 optimizer.zero_grad()
@@ -108,7 +115,8 @@ def loupeTrain(traindata,valdata,\
                 databatch = normalize_data(valdata[batch,:,:]) if len(batch)>1 else normalize_data(valdata[batch,:,:].view(-1,shape[0],shape[1]))
                 xstar = databatch.view(batch.shape[0],-1,shape[0],shape[1])
                 ystar = F.fftn(xstar,dim=(2,3),norm='ortho')
-                x_recon = loupe(ystar)
+                x_recon,_ = loupe(ystar)
+                x_recon = x_recon.detach()
                 loss_val += criterion(x_recon,xstar)
                 valbatchind += 1
             progress_str = f'[{epoch_count+1}/{epochs}]'
@@ -148,11 +156,11 @@ def get_args():
                         help='Batch size train', dest='batchsize_train')
     parser.add_argument('-bv', '--batch-size-val', metavar='BV', type=int, nargs='?', default=5,
                         help='Batch size val', dest='batchsize_val')
-    parser.add_argument('-lrm', '--learning-rate-mask', metavar='LRM', type=float, nargs='?', default=1e-3,
+    parser.add_argument('-lrm', '--learning-rate-mask', metavar='LRM', type=float, nargs='?', default=5e-4,
                         help='Learning rate mask', dest='lrm')
     parser.add_argument('-lru', '--learning-rate-unet', metavar='LRU', type=float, nargs='?', default=1e-4,
                         help='Learning rate unet', dest='lru')
-    parser.add_argument('-skip', '--unet-skip', type=bool, default=True,
+    parser.add_argument('-skip', '--unet-skip', type=str, default='True',
                         help='skip connections in structure of unet', dest='unet_skip')
     parser.add_argument('-s', '--sparsity', type=float, default=.25,
                         help='sparsity', dest='sparsity')
@@ -166,6 +174,8 @@ def get_args():
                         help='starting epoch count',dest='epoch_start')
     parser.add_argument('-bis','--batchind-start',metavar='BIS',type=int,nargs='?',default=0,
                         help='starting batchind',dest='batchind_start')
+    parser.add_argument('-hp', '--history-path', type=str, default=None,
+                        help='path file for npz file recording training history', dest='histpath')
 
     return parser.parse_args()
 
@@ -173,6 +183,11 @@ def get_args():
 if __name__ == '__main__':
     args = get_args()
     print(args)
+    
+    if args.unet_skip == 'True':
+        args.unet_skip = True
+    elif args.unet_skip == 'False':
+        args.unet_skip = False
     
     traindata  = np.load('/home/huangz78/data/traindata_x.npz')
     dtyp       = torch.float
@@ -187,5 +202,5 @@ if __name__ == '__main__':
                unet_skip=args.unet_skip, n_channels=1,\
                lrm=args.lrm, lru=args.lru, weight_decay=0, momentum=0,\
                epochs=args.epochs, batchsize_train=args.batchsize_train, batchsize_val=args.batchsize_val, count_start=(args.epoch_start,args.batchind_start),\
-               modelpath=args.modelpath,\
+               modelpath=args.modelpath,histpath=args.histpath,\
                save_cp=True)

@@ -13,7 +13,7 @@ import utils
 import logging
 import matplotlib.pyplot as plt
 from sigpy.mri.app import TotalVariationRecon
-from utils import mask_complete , mask_makebinary, mask_naiveRand, raw_normalize, get_x_f_from_yfull, apply_mask, sigmoid_binarize, compute_hfen
+from utils import *
 from solvers import ADMM_TV
 import copy
 
@@ -248,8 +248,8 @@ def mask_backward(highmask,xstar,\
         ## track training process, and printing information
         #################################       
         fullmask_b    = mask_makebinary(fullmask.clone().detach(),threshold=0.5,sigma=False)
-        mask_sparsity = torch.sum(fullmask_b).item()/(batchsize*imgHeg)
         delta_mask    = fullmask_old - fullmask_b
+        mask_sparsity = torch.sum(fullmask_b).item()/(batchsize*imgHeg)
         added_rows    = torch.sum(delta_mask==-1).item()/batchsize;   reducted_rows= torch.sum(delta_mask==1).item()/batchsize
         changed_rows  = torch.abs(delta_mask).sum().item()/batchsize
         cr_per_batch += changed_rows
@@ -262,7 +262,7 @@ def mask_backward(highmask,xstar,\
             print('No change in row selections after {} iters, ending iteration~'.format(rCount))
             break
         if verbose and (changed_rows>0): # if there is any changed rows, then it is reported in every iteration
-            print('Iter {}, rows added: {}, rows reducted: {}'.format(Iter+1,added_rows,reducted_rows))
+            print('Iter {}, rows added: {}, rows reducted: {}, current samp. ratio: {}'.format(Iter+1,added_rows,reducted_rows,mask_sparsity))
 #         if verbose and (Iter%print_every==0): # every print_every iters, print the quality and sparsity of the current mask
 #             # or we can print only 10 times: max(maxIter//10,1)
 #             with torch.no_grad(): ## Validation
@@ -290,7 +290,7 @@ def mask_backward(highmask,xstar,\
     if normalize:
         M_high = raw_normalize(M_high,budget,threshold=0.5)
     highmask_refined = mask_makebinary(M_high,threshold=0.5,sigma=False)
-    
+    mask_sparsity = (torch.sum(highmask_refined).item()+corefreq)/(batchsize*imgHeg)
 #     if testmode=='ADMM':
 #             mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp)
     if testmode=='UNET':

@@ -79,4 +79,4 @@ class LOUPE(nn.Module):
         y, mask = self.samplers[0](ystar,self.sparsity)
         x = torch.abs(F.ifftn(y,dim=(2,3),norm='ortho'))
         x_recon = self.unet(x)      
-        return x_recon
+        return x_recon, mask

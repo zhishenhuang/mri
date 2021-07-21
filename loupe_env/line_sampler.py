@@ -181,9 +181,10 @@ class LOUPESampler(nn.Module):
 
 #         neg_entropy = self._mask_neg_entropy(rescaled_mask)
 #         masked_kspace = binarized_mask * kspace
-        binarized_mask = torch.tile(torch.tile(binarized_mask,(1,1,1,self.shape[1])),(kspace.shape[0],1,1,1))
+        binarized_mask_mat = torch.tile(torch.tile(binarized_mask,(1,1,1,self.shape[1])),(kspace.shape[0],1,1,1))
+        binarized_mask_mat.retain_grad()
 #         kspace[:,:,binarized_mask==0,:] = 0
-        masked_kspace  = torch.mul(binarized_mask , kspace) 
+        masked_kspace = torch.mul(binarized_mask_mat , kspace) 
 #         data_to_vis_sampler = {'prob_mask': transforms.fftshift(prob_mask[0,:,:,0],dim=(0,1)).cpu().detach().numpy(), 
 #                                'rescaled_mask': transforms.fftshift(rescaled_mask[0,:,:,0],dim=(0,1)).cpu().detach().numpy(), 
 #                                'binarized_mask': transforms.fftshift(binarized_mask[0,:,:,0],dim=(0,1)).cpu().detach().numpy()}
