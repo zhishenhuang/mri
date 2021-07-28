@@ -21,6 +21,31 @@ from skimage.metrics import peak_signal_noise_ratio as psnr_
 #     return torch.real(F.ifftn(torch.tensordot(M.to(DType) , F.fftn(X,dim=(0),norm='ortho'), \
 #                 dims=([1],[0])),dim=(0),norm='ortho'))
 
+def weights_init(m):
+    classname = m.__class__.__name__
+    if classname == 'DoubleConv':
+        for ind in range(4):
+            subclassname = m.double_conv[ind].__class__.__name__
+            if subclassname.find('Conv') != -1:
+                nn.init.normal_(m.double_conv[ind].weight.data, 0.0, 0.02)
+            elif subclassname.find('BatchNorm') != -1:
+                nn.init.normal_(m.double_conv[ind].weight.data, 1.0, 0.02)
+                nn.init.constant_(m.double_conv[ind].bias.data, 0)
+            elif subclassname.find('Linear') != -1:
+                nn.init.normal_(m.double_conv[ind].weight.data, 1.0, 0.02)
+                nn.init.constant_(m.double_conv[ind].bias.data, 0)
+    elif classname == 'OutConv':
+        pass   
+    else:
+        if classname.find('Conv') != -1:
+            nn.init.normal_(m.weight.data, 0.0, 0.02)
+        elif classname.find('BatchNorm') != -1:
+            nn.init.normal_(m.weight.data, 1.0, 0.02)
+            nn.init.constant_(m.bias.data, 0)
+        elif classname.find('Linear') != -1:
+            nn.init.normal_(m.weight.data, 1.0, 0.02)
+            nn.init.constant_(m.bias.data, 0)
+
 def sigmoid_binarize(M,threshold=0.5):
     sigmoid = nn.Sigmoid()
     mask = sigmoid(M)
@@ -282,9 +307,9 @@ def raw_normalize(M,budget,threshold=0.5): # done
     alpha = budget/d
     with torch.no_grad():
         for ind in range(M.shape[0]):
-            nnz   = torch.sum(M[ind,:]>threshold)
-            pbar  = nnz/d
-            if  nnz > budget:
+            nnz  = torch.sum(M[ind,:]>threshold)
+            pbar = nnz/d
+            if  nnz >= budget:
                 sampinds  = np.argsort(M[ind,:].detach().numpy())[::-1][0:budget]
                 eraseinds = np.setdiff1d(np.arange(0,M.shape[1],1),sampinds)
                 M[ind,eraseinds] = 0
@@ -298,6 +323,9 @@ def raw_normalize(M,budget,threshold=0.5): # done
     return M
 
 def get_x_f_from_yfull(mask,yfull,DTyp=torch.cfloat): # done
+    '''
+    yfull is assumed to be rolled!
+    '''
     if len(mask.shape) == 1:
         mask = mask.repeat(yfull.shape[0],1)
     subsamp_z = torch.zeros(yfull.shape).to(DTyp)
@@ -363,7 +391,7 @@ def mask_pnorm(y,fix=10,other=30,p=2):
     return mask,maskInd,erasInd
 
 
-def compute_hfen(recon,gt):
+def compute_hfen(recon: torch.Tensor,gt: torch.Tensor) -> np.ndarray:
     LoG_GT    = ndimage.gaussian_laplace(np.real(gt), sigma=1)    + 1j*ndimage.gaussian_laplace(np.imag(gt), sigma=1)
     LoG_recon = ndimage.gaussian_laplace(np.real(recon), sigma=1) + 1j*ndimage.gaussian_laplace(np.imag(recon), sigma=1)
     return np.linalg.norm(LoG_recon - LoG_GT)/np.linalg.norm(LoG_GT)

@@ -20,6 +20,40 @@ import copy
 sys.path.insert(0,'/home/huangz78/mri/unet/')
 from unet_model import UNet
 
+from torch.autograd import Function
+class ThresholdBinarizeMask(Function):
+    def __init__(self):
+        """
+            Straight through estimator.
+            The forward step binarizes the real-valued mask.
+            The backward step estimate the non differentiable > operator using sigmoid with large slope (10).
+        """
+        super(ThresholdBinarizeMask, self).__init__()
+
+    @staticmethod
+    def forward(ctx, input):
+        batch_size = len(input)
+        results = [] 
+
+        for i in range(batch_size):
+            x = input[i:i+1]
+            result = (x > .5).float()
+            results.append(result)
+
+        results = torch.cat(results, dim=0)
+#         ctx.save_for_backward(input)
+        return results  
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        slope = 1
+#         input = ctx.saved_tensors
+
+        # derivative of M
+        current_grad = slope
+
+        return current_grad * grad_output
+
 def proj_eps(M,eps):
     with torch.no_grad(): 
         M[(M<=0.5)&(M>eps)] = eps
@@ -27,6 +61,7 @@ def proj_eps(M,eps):
         M[(M<0)] = 0
         M[(M>1)] = 1
         return M
+    
 def nrmse(x,xstar):
     '''
     input should be torch tensors
@@ -155,6 +190,7 @@ def mask_backward(highmask,xstar,\
     fullmask = mask_complete(M_high,imgHeg,dtyp=dtyp)
     fullmask_b = fullmask.clone()
     
+    binarize = ThresholdBinarizeMask().apply
     criterion_mnet = nn.BCEWithLogitsLoss()
     torch.autograd.set_detect_anomaly(False)
     
@@ -242,12 +278,12 @@ def mask_backward(highmask,xstar,\
         fullmask_old = mask_makebinary(fullmask.detach().numpy(),threshold=0.5,sigma=False) 
         optimizer.step()
         M_high = proj_eps(M_high,eps) # soft-hard-thresholding as postprocessing
-        fullmask = mask_complete(M_high,imgHeg,dtyp=dtyp)
+        fullmask = binarize(mask_complete(M_high,imgHeg,dtyp=dtyp))
         
         #################################
         ## track training process, and printing information
         #################################       
-        fullmask_b    = mask_makebinary(fullmask.clone().detach(),threshold=0.5,sigma=False)
+        fullmask_b    = fullmask.clone().detach()
         delta_mask    = fullmask_old - fullmask_b
         mask_sparsity = torch.sum(fullmask_b).item()/(batchsize*imgHeg)
         added_rows    = torch.sum(delta_mask==-1).item()/batchsize;   reducted_rows= torch.sum(delta_mask==1).item()/batchsize
@@ -263,36 +299,18 @@ def mask_backward(highmask,xstar,\
             break
         if verbose and (changed_rows>0): # if there is any changed rows, then it is reported in every iteration
             print('Iter {}, rows added: {}, rows reducted: {}, current samp. ratio: {}'.format(Iter+1,added_rows,reducted_rows,mask_sparsity))
-#         if verbose and (Iter%print_every==0): # every print_every iters, print the quality and sparsity of the current mask
-#             # or we can print only 10 times: max(maxIter//10,1)
-#             with torch.no_grad(): ## Validation
-#                 if (cr_per_batch>0) or (Iter==0): # (changed_rows>0):
-# #                     if testmode == 'ADMM':
-# #                         mask_loss = mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp)
-#                     if testmode=='UNET':
-#                         mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen)
-#                     elif testmode=='sigpy':
-#                         mask_loss = mask_eval(fullmask_b,xstar,mode='sigpy',hfen=hfen)
-#                     if testmode is not None:
-#                         print('iter: {}, upper level loss: {}\n changed rows in this batch: {}, loss of current mask: {}'.format(Iter+1,loss,cr_per_batch,mask_loss))
-#                         print('samp. ratio: {}, Recon. rel. err: {} \n'.format(mask_sparsity,nrmse(x,xstar)) )
-#                     else:
-#                         print('iter: {}, upper level loss: {}\n changed rows in this batch: {}'.format(Iter+1,loss,cr_per_batch))
-#                     cr_per_batch = 0
-# #                     scheduler.step(mask_loss)
-#                 else:
-#                     print('iter: {}, upper level loss: {}'.format(Iter+1,loss))                   
+               
         if save_cp and (Iter%max(maxIter//10,1))==0:
             dir_checkpoint = '/home/huangz78/mri/checkpoints/'
             torch.save({'model_state_dict': UNET.state_dict()}, dir_checkpoint + 'unet_'+ str(UNET.n_channels) +'_by_mask.pth')
             print(f'\t Checkpoint saved after Iter {Iter + 1}!')
         Iter += 1   
+    
     if normalize:
         M_high = raw_normalize(M_high,budget,threshold=0.5)
     highmask_refined = mask_makebinary(M_high,threshold=0.5,sigma=False)
     mask_sparsity = torch.sum(highmask_refined).item()/(batchsize*imgHeg) + corefreq/imgHeg
-#     if testmode=='ADMM':
-#             mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp)
+
     if testmode=='UNET':
         mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp),xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen)
     elif testmode == 'sigpy':

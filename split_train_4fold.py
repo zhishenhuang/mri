@@ -25,7 +25,7 @@ torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
 
-def alternating_update_with_unetRecon(mnet,unet,trainfulls,yfulls=None,\
+def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,yfulls=None,\
                                       maxIter_mb=20,alpha=2.8*1e-5,c=0.05, lr_mb=1e-2,\
                                       maxRep=5,lr_mn=1e-4,\
                                       epoch=1,batchsize=5,\
@@ -64,12 +64,12 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,yfulls=None,\
                 ######################################## 
                 if mnet.in_channels == 1:
                     x_lf     = get_x_f_from_yfull(lowfreqmask,yfull)
-                    highmask = mnet(x_lf.view(batch.size,1,xstar.shape[1],xstar.shape[2]))
+                    highmask = torch.sigmoid( mnet(x_lf.view(batch.size,1,xstar.shape[1],xstar.shape[2])) )
                 elif mnet.in_channels == 2:
                     y = torch.zeros((yfull.shape[0],2,yfull.shape[1],yfull.shape[2]),dtype=torch.float)
                     y[:,0,lowfreqmask==1,:] = torch.real(yfull)[:,lowfreqmask==1,:]
                     y[:,1,lowfreqmask==1,:] = torch.imag(yfull)[:,lowfreqmask==1,:]
-                    highmask = mnet(y)
+                    highmask = torch.sigmoid( mnet(y) )
                 highmask_refined,unet,loss_aft,loss_bef = mask_backward(highmask,xstar,unet=unet,mnet=mnet,\
                                   beta=1.,alpha=alpha,c=c,\
                                   maxIter=maxIter_mb,seed=0,break_limit=np.inf,\
@@ -118,6 +118,9 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,yfulls=None,\
                     np.savez(filepath,loss_rand=loss_rand,loss_after=loss_after,loss_before=loss_before,freqs=(corefreq,budget))
                 global_step += 1
                 batchind += 1
+            ######################################
+            # validation
+            ######################################
             batchind = 0
             epoch_count += 1
     except KeyboardInterrupt: # need debug
@@ -127,8 +130,8 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,yfulls=None,\
 #                     'epoch': epoch-1
 #                     }, dir_checkpoint + 'mnet.pth')
 #         print('Model, optimizer and epoch count saved after interrupt~')
-        torch.save({'model_state_dict': mnet.state_dict()}, dir_checkpoint + 'mnet_split_trained.pth')
-        torch.save({'model_state_dict': unet.state_dict()}, dir_checkpoint + 'unet_split_trained.pth')
+        torch.save({'model_state_dict': mnet.state_dict()}, dir_checkpoint + 'mnet_split_trained_cf'+ str(corefreq)+'_bg_'+str(budget) +'.pt')
+        torch.save({'model_state_dict': unet.state_dict()}, dir_checkpoint + 'unet_split_trained_cf'+ str(corefreq)+'_bg_'+str(budget)+'.pt')
         print(f'\t Checkpoint saved at Python epoch {epoch}, Python batchind {batchind}!')
         filepath = '/home/huangz78/checkpoints/alternating_update_error_track.npz'
         np.savez(filepath,loss_rand=loss_rand,loss_after=loss_after,loss_before=loss_before,freqs=(corefreq,budget))

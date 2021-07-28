@@ -176,6 +176,8 @@ def get_args():
                         help='starting batchind',dest='batchind_start')
     parser.add_argument('-hp', '--history-path', type=str, default=None,
                         help='path file for npz file recording training history', dest='histpath')
+    parser.add_argument('-save', '--save-model', type=str, default='True',
+                        help='whether to save model', dest='save_cp')
 
     return parser.parse_args()
 
@@ -188,6 +190,11 @@ if __name__ == '__main__':
         args.unet_skip = True
     elif args.unet_skip == 'False':
         args.unet_skip = False
+        
+    if args.save_cp == 'True':
+        args.save_cp = True
+    elif args.save_cp == 'False':
+        args.save_cp = False
     
     traindata  = np.load('/home/huangz78/data/traindata_x.npz')
     dtyp       = torch.float
@@ -203,4 +210,4 @@ if __name__ == '__main__':
                lrm=args.lrm, lru=args.lru, weight_decay=0, momentum=0,\
                epochs=args.epochs, batchsize_train=args.batchsize_train, batchsize_val=args.batchsize_val, count_start=(args.epoch_start,args.batchind_start),\
                modelpath=args.modelpath,histpath=args.histpath,\
-               save_cp=True)
+               save_cp=args.save_cp)
