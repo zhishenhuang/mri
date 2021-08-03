@@ -21,30 +21,53 @@ from skimage.metrics import peak_signal_noise_ratio as psnr_
 #     return torch.real(F.ifftn(torch.tensordot(M.to(DType) , F.fftn(X,dim=(0),norm='ortho'), \
 #                 dims=([1],[0])),dim=(0),norm='ortho'))
 
-def weights_init(m):
+def mnet_weights_init(m):
     classname = m.__class__.__name__
-    if classname == 'DoubleConv':
-        for ind in range(4):
-            subclassname = m.double_conv[ind].__class__.__name__
-            if subclassname.find('Conv') != -1:
-                nn.init.normal_(m.double_conv[ind].weight.data, 0.0, 0.02)
-            elif subclassname.find('BatchNorm') != -1:
-                nn.init.normal_(m.double_conv[ind].weight.data, 1.0, 0.02)
-                nn.init.constant_(m.double_conv[ind].bias.data, 0)
-            elif subclassname.find('Linear') != -1:
-                nn.init.normal_(m.double_conv[ind].weight.data, 1.0, 0.02)
-                nn.init.constant_(m.double_conv[ind].bias.data, 0)
-    elif classname == 'OutConv':
-        pass   
-    else:
-        if classname.find('Conv') != -1:
-            nn.init.normal_(m.weight.data, 0.0, 0.02)
-        elif classname.find('BatchNorm') != -1:
-            nn.init.normal_(m.weight.data, 1.0, 0.02)
-            nn.init.constant_(m.bias.data, 0)
-        elif classname.find('Linear') != -1:
-            nn.init.normal_(m.weight.data, 1.0, 0.02)
-            nn.init.constant_(m.bias.data, 0)
+    print(m)
+    if classname.find('Conv2d') != -1:
+        nn.init.normal_(m.weight.data, 0.0, 0.02)
+    elif classname.find('BatchNorm2d') != -1:
+        nn.init.normal_(m.weight.data, 1.0, 0.02)
+        nn.init.constant_(m.bias.data, 0)
+    elif classname.find('Linear') != -1:
+        nn.init.normal_(m.weight.data, 0.0, 0.02)
+        nn.init.constant_(m.bias.data, 0)
+
+# def mnet_weights_init(m):
+#     classname = m.__class__.__name__
+# #     print(classname)
+#     if classname == 'DoubleConv':
+#         for ind in range(4):
+#             subclassname = m.double_conv[ind].__class__.__name__
+#             if subclassname.find('Conv') != -1:
+#                 nn.init.normal_(m.double_conv[ind].weight.data, 0.0, 0.02)
+#                 print(classname,'1')
+#             elif subclassname.find('BatchNorm') != -1:
+#                 nn.init.normal_(m.double_conv[ind].weight.data, 1.0, 0.02)
+#                 print(classname,'2-1')
+#                 nn.init.constant_(m.double_conv[ind].bias.data, 0)
+#                 print(classname,'2-2')
+#             elif subclassname.find('Linear') != -1:
+#                 nn.init.normal_(m.double_conv[ind].weight.data, 0.0, 0.02)
+#                 print(classname,'3-1')
+#                 nn.init.constant_(m.double_conv[ind].bias.data, 0)
+#                 print(classname,'3-2')
+#     elif classname == 'OutConv':
+#         pass   
+#     else:
+#         if classname.find('Conv') != -1:
+#             nn.init.normal_(m.weight.data, 0.0, 0.02)
+#             print(classname,'4')
+#         elif classname.find('BatchNorm') != -1:
+#             nn.init.normal_(m.weight.data, 1.0, 0.02)
+#             print(classname,'5-1')
+#             nn.init.constant_(m.bias.data, 0)
+#             print(classname,'5-2')
+#         elif classname.find('Linear') != -1:
+#             nn.init.normal_(m.weight.data, 0.0, 0.02)
+#             print(classname,'6-1')
+#             nn.init.constant_(m.bias.data, 0)
+#             print(classname,'6-2')
 
 def sigmoid_binarize(M,threshold=0.5):
     sigmoid = nn.Sigmoid()
@@ -67,7 +90,7 @@ def rolling_mean(x,window):
     cumsum = np.cumsum(np.insert(x, 0, 0))
     return (cumsum[window:] - cumsum[:-window]) / float(window)
 
-def kplot(y,roll=False,log=False,cmap=None,flip=True):
+def kplot(y,roll=False,log=False,cmap=None,flip=True,img_name=None):
     '''
     This function plots the reconstructed image.
     -- Options:
@@ -112,6 +135,8 @@ def kplot(y,roll=False,log=False,cmap=None,flip=True):
             # axs.set_title('Real part mag')
             plt.colorbar(hd1,ax=axs)
             plt.show()
+        if img_name is not None:
+            axs.set_title(img_name)
     elif len(yshape)==2: # one real-valued image
         fig,axs = plt.subplots(1,1,figsize=(10, 10))
         if roll:
@@ -126,7 +151,8 @@ def kplot(y,roll=False,log=False,cmap=None,flip=True):
                 hd1 = axs.imshow(np.log(y),cmap=cmap)
             except TypeError:
                 hd1 = axs.imshow(np.log(np.abs(y)),cmap=cmap)
-        axs.set_title('Image')
+        if img_name is not None:
+            axs.set_title(img_name)
         plt.colorbar(hd1,ax=axs)
         plt.show()
     elif len(yshape)==1: # mask
@@ -144,6 +170,8 @@ def kplot(y,roll=False,log=False,cmap=None,flip=True):
         axs.set_ylabel('Frequencies')
         if not flip:
             plt.colorbar(hd1,ax=axs)
+        if img_name is not None:
+            axs.set_title(img_name)
         plt.rcParams.update({'font.size': 25})
         plt.show()
         

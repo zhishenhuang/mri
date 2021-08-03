@@ -155,7 +155,7 @@ def mask_backward(highmask,xstar,\
     fullmask = mask_complete(M_high,imgHeg,dtyp=dtyp)
     fullmask_b = fullmask.clone()
     
-    criterion_mnet = nn.BCEWithLogitsLoss()
+    criterion_mnet = nn.MSELoss()
     torch.autograd.set_detect_anomaly(False)
     
     if mode == 'UNET':

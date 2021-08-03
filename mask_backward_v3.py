@@ -26,7 +26,7 @@ class ThresholdBinarizeMask(Function):
         """
             Straight through estimator.
             The forward step binarizes the real-valued mask.
-            The backward step estimate the non differentiable > operator using sigmoid with large slope (10).
+            The backward step estimate the non differentiable > operator using sigmoid with large slope (1).
         """
         super(ThresholdBinarizeMask, self).__init__()
 
@@ -53,14 +53,6 @@ class ThresholdBinarizeMask(Function):
         current_grad = slope
 
         return current_grad * grad_output
-
-def proj_eps(M,eps):
-    with torch.no_grad(): 
-        M[(M<=0.5)&(M>eps)] = eps
-        M[(M>0.5)&(M<1-eps)] = 1-eps
-        M[(M<0)] = 0
-        M[(M>1)] = 1
-        return M
     
 def nrmse(x,xstar):
     '''
@@ -129,7 +121,7 @@ def mask_backward(highmask,xstar,\
                   maxIter=300,seed=0,eps=1.,normalize=True,\
                   budget=20,\
                   lr=1e-3,weight_decay=0,momentum=0,\
-                  beta=1, alpha=5e-1,c =.1,\
+                  beta=1, alpha=5e-1,c =.1,slope=1,\
                   mode='UNET',unet_mode=1,unet=None,mnet=None,\
                   break_limit=np.inf,print_every=10,\
                   verbose=False,save_cp=False,dtyp=torch.float,\
@@ -148,6 +140,7 @@ def mask_backward(highmask,xstar,\
     unroll_block         : how many blocks of solver to unroll, default 3
     lr                   : learning rate to update mask indicator, default 1e-3
     lr_Lambda            : learning rate to update the ADMM parameter Lambda
+    slope                : slope inside the sigmoid function to output a real-valued mask
     beta                 : the weight for the data fidelity term in the loss function
     alpha                : l1 penalty magnitude when selecting high frequency masks
     c                    : magnitude for consistency term || M - mnet(x_lf) ||_2
@@ -182,16 +175,16 @@ def mask_backward(highmask,xstar,\
         mask_pred = sigmoid_binarize(mnet(x_lf.view(batchsize,1,imgHeg,imgWid)).detach())
     elif mnet.in_channels == 2:
         z         = apply_mask(lowfreqmask,y)
-        mask_pred = sigmoid_binarize(mnet(z))
+        mask_pred = sigmoid_binarize(mnet(z).detach())
     
     ## initialising M
     M_high = highmask.clone().detach()
     M_high.requires_grad = True
-    fullmask = mask_complete(M_high,imgHeg,dtyp=dtyp)
+    fullmask = mask_complete(torch.sigmoid(slope*M_high),imgHeg,dtyp=dtyp)
     fullmask_b = fullmask.clone()
     
     binarize = ThresholdBinarizeMask().apply
-    criterion_mnet = nn.MSELoss()
+    criterion_mnet = nn.BCEWithLogitsLoss()
     torch.autograd.set_detect_anomaly(False)
     
     if mode == 'UNET':
@@ -201,32 +194,18 @@ def mask_backward(highmask,xstar,\
             UNET.load_state_dict(checkpoint['model_state_dict'])
             print('Unet loaded successfully from : ' + '/home/huangz78/mri/checkpoints/unet_'+ str(UNET.n_channels) +'.pth' )
             UNET.train()
-#             optimizer = optim.Adam([
-#                     {'params': M_high},
-#                     {'params': UNET.parameters(),'lr':1e-4}
-#                 ], lr=lr, weight_decay=weight_decay)
+
             optimizer = optim.RMSprop([
                     {'params': M_high},
                     {'params': UNET.parameters(),'lr':1e-4}
                 ], lr=lr, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
-#             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2)
         else:
             UNET = unet
             UNET.train()
-#             optimizer = optim.Adam([
-#                     {'params': M_high},
-#                     {'params': UNET.parameters(),'lr':1e-4}
-#                 ], lr=lr, weight_decay=weight_decay)
             optimizer = optim.RMSprop([
                     {'params': M_high},
                     {'params': UNET.parameters(),'lr':1e-4}
                 ], lr=lr, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
-#             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2)
-#     else: # mode is unrolling iterative methods
-#         optimizer = optim.SGD([M_high],lr=lr)
-#         if testmode=='ADMM':
-#             print('loss of the input mask: ', mask_eval(fullmask_b,xstar,unroll_block=unroll_block,Lambda=Lambda,rho=rho,dtyp=dtyp) )
-# #     unet_eval = copy.deepcopy(UNET); unet_eval.eval()
 
     if testmode=='UNET':
         init_mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen)
@@ -260,8 +239,7 @@ def mask_backward(highmask,xstar,\
                 x_in   = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
                 x      = UNET(x_in)
                 
-#         loss = alpha * torch.norm(M_high,p=1) 
-        loss = beta * nrmse(x,xstar) + alpha * torch.norm(M_high,p=1) + c * criterion_mnet(M_high.view(mask_pred.shape),mask_pred) 
+        loss = beta * nrmse(x,xstar) + alpha * torch.norm(torch.sigmoid(slope*M_high),p=1) + c * criterion_mnet(slope*M_high.view(mask_pred.shape),mask_pred) 
     ## upper-level loss = nrmse + alpha * ||Mask_actual||_1 + c * mnet_pred_loss, where the last term is added to enforce consistency between mask_backward and mnet in the iteration process, May 7
     ## Jul 13, torch.norm( sigmoid(M_high), p=1 ) --> unnecessary, because M_high is in [0,1].
     
@@ -277,8 +255,7 @@ def mask_backward(highmask,xstar,\
         loss.backward()    
         fullmask_old = mask_makebinary(fullmask.detach().numpy(),threshold=0.5,sigma=False) 
         optimizer.step()
-        M_high = proj_eps(M_high,eps) # soft-hard-thresholding as postprocessing
-        fullmask = binarize(mask_complete(M_high,imgHeg,dtyp=dtyp))
+        fullmask = binarize(mask_complete(torch.sigmoid(slope*M_high),imgHeg,dtyp=dtyp))
         
         #################################
         ## track training process, and printing information
@@ -307,8 +284,10 @@ def mask_backward(highmask,xstar,\
         Iter += 1   
     
     if normalize:
-        M_high = raw_normalize(M_high,budget,threshold=0.5)
-    highmask_refined = mask_makebinary(M_high,threshold=0.5,sigma=False)
+        mask_raw = raw_normalize(torch.sigmoid(slope*M_high),budget,threshold=0.5)
+    else:
+        mask_raw = torch.sigmoid(slope*M_high)
+    highmask_refined = mask_makebinary(mask_raw,threshold=0.5,sigma=False)
     mask_sparsity = torch.sum(highmask_refined).item()/(batchsize*imgHeg) + corefreq/imgHeg
 
     if testmode=='UNET':

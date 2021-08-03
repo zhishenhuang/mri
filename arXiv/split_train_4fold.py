@@ -16,7 +16,7 @@ import copy
 
 from utils import *
 from mnet import MNet
-from mask_backward_v1 import mask_backward, mask_eval
+from mask_backward_v3 import mask_backward, mask_eval
 sys.path.insert(0,'/home/huangz78/mri/unet/')
 from unet_model import UNet
 
@@ -93,12 +93,13 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                 print(iterprog + f', quality of old mnet mask : {loss_bef}')
                 print(iterprog + f', quality of refined  mask : {loss_aft}')
                 print(iterprog + f', quality of random   mask : {randqual}')
+                loss_rand.append(randqual); loss_after.append(loss_aft); loss_before.append(loss_bef) ## check mnet performance: does it beat random sampling?
                 ########################################  
                 ## (2) update mnet
                 ########################################  
                 mnet.train()
     #             unet.eval()
-                if loss_aft < loss_bef:
+                if (loss_aft < loss_bef) and (loss_aft < randqual):
                     rep = 0
                     while rep < maxRep:
                         if mnet.in_channels == 1:
@@ -116,10 +117,6 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                         optimizer_m.step()
                         rep += 1
                     mnet.eval()
-                ########################################  
-                ## (3) check mnet performance: does it beat random sampling?
-                ########################################
-                    loss_rand.append(randqual); loss_after.append(loss_aft); loss_before.append(loss_bef)
                     print(iterprog+' is a VALID step!')
                 else:
                     print(iterprog+' is an invalid step!')
@@ -128,7 +125,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                     torch.save({'model_state_dict': mnet.state_dict()}, dir_checkpoint + 'mnet_split_trained_cf'+ str(corefreq)+'_bg_'+str(budget) +'.pt')
                     torch.save({'model_state_dict': unet.state_dict()}, dir_checkpoint + 'unet_split_trained_cf'+ str(corefreq)+'_bg_'+str(budget)+'.pt')
                     print(f'\t Checkpoint saved at epoch {epoch_count+1}, iter {global_step + 1}, batchind {batchind+1}!')
-                    filepath = '/home/huangz78/checkpoints/alternating_update_error_track_8fold.npz'
+                    filepath = '/home/huangz78/checkpoints/alternating_update_error_track_4fold.npz'
                     np.savez(filepath,loss_rand=loss_rand,loss_after=loss_after,loss_before=loss_before,loss_val=loss_val)
                 global_step += 1
                 batchind += 1
@@ -168,7 +165,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
             torch.save({'model_state_dict': mnet.state_dict()}, dir_checkpoint + 'mnet_split_trained_cf'+ str(corefreq)+'_bg_'+str(budget) +'.pt')
             torch.save({'model_state_dict': unet.state_dict()}, dir_checkpoint + 'unet_split_trained_cf'+ str(corefreq)+'_bg_'+str(budget)+'.pt')
             print(f'\t Checkpoint saved at Python epoch {epoch_count}, Python batchind {batchind}!')
-            filepath = '/home/huangz78/checkpoints/alternating_update_error_track_8fold.npz'
+            filepath = '/home/huangz78/checkpoints/alternating_update_error_track_4fold.npz'
             np.savez(filepath,loss_rand=loss_rand,loss_after=loss_after,loss_before=loss_before,loss_val=loss_val)
             print('Model is saved after interrupt~')
         try:
@@ -183,16 +180,16 @@ def get_args():
     
     parser.add_argument('-e', '--epochs', metavar='E', type=int, default=10,
                         help='Number of epochs', dest='epochs')
-    parser.add_argument('-b', '--batch-size', metavar='B', type=int, nargs='?', default=5,
+    parser.add_argument('-b', '--batch-size', metavar='B', type=int, nargs='?', default=3,
                         help='Batch size', dest='batchsize')
     parser.add_argument('-lrb', '--learning-rate-backward', metavar='LRB', type=float, nargs='?', default=1e-2,
                         help='Learning rate for maskbackward', dest='lrb')
     parser.add_argument('-lrn', '--learning-rate-mnet', metavar='LRN', type=float, nargs='?', default=1e-4,
                         help='Learning rate for mnet', dest='lrn')
 
-    parser.add_argument('-bs','--base-size',metavar='BS',type=int,nargs='?',default=8,
+    parser.add_argument('-bs','--base-size',metavar='BS',type=int,nargs='?',default=16,
                         help='number of observed low frequencies', dest='base_freq')
-    parser.add_argument('-bg','--budget',metavar='BG',type=int,nargs='?',default=32,
+    parser.add_argument('-bg','--budget',metavar='BG',type=int,nargs='?',default=64,
                         help='number of high frequencies to sample', dest='budget')
     parser.add_argument('-es','--epoch-start',metavar='ES',type=int,nargs='?',default=0,
                         help='starting epoch count',dest='epoch_start')
@@ -262,7 +259,7 @@ if __name__=='__main__':
     print('validation data size:', val_xfull.shape)
     
     alternating_update_with_unetRecon(mnet,UNET,train_xfull,val_xfull,train_yfulls=train_yfull,val_yfulls=val_yfull,\
-                                  maxIter_mb=args.maxItermb,alpha=10**(-4.2),c=1e-2,lr_mb=args.lrb,\
+                                  maxIter_mb=args.maxItermb,alpha=10**(-3.95),c=1e-2,lr_mb=args.lrb,\
                                   maxRep=args.mnRep,lr_mn=args.lrn,\
                                   corefreq=args.base_freq,budget=args.budget,\
                                   epoch=args.epochs,batchsize=args.batchsize,\
