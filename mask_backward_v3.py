@@ -158,6 +158,10 @@ def mask_backward(highmask,xstar,\
     arxived inputs       : unroll_block=8,Lambda=10**(-6.5),rho=1e2,lr_Lambda=1e-8
     '''
     torch.manual_seed(seed)
+    binarize = ThresholdBinarizeMask().apply
+    criterion_mnet = nn.BCEWithLogitsLoss()
+    torch.autograd.set_detect_anomaly(False)
+    
     batchsize,imgHeg,imgWid = xstar.shape[0],xstar.shape[1],xstar.shape[2]
     if not isinstance(xstar,torch.Tensor):
         xstar    = torch.tensor(xstar,dtype=dtyp)
@@ -180,13 +184,9 @@ def mask_backward(highmask,xstar,\
     ## initialising M
     M_high = highmask.clone().detach()
     M_high.requires_grad = True
-    fullmask = mask_complete(torch.sigmoid(slope*M_high),imgHeg,dtyp=dtyp)
+    fullmask = binarize(mask_complete(torch.sigmoid(slope*M_high),imgHeg,dtyp=dtyp))
     fullmask_b = fullmask.clone()
-    
-    binarize = ThresholdBinarizeMask().apply
-    criterion_mnet = nn.BCEWithLogitsLoss()
-    torch.autograd.set_detect_anomaly(False)
-    
+   
     if mode == 'UNET':
         if unet is None:
             UNET =  UNet(n_channels=unet_mode,n_classes=unet_mode,bilinear=True,skip=False)
@@ -208,9 +208,9 @@ def mask_backward(highmask,xstar,\
                 ], lr=lr, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
 
     if testmode=='UNET':
-        init_mask_loss = mask_eval(fullmask_b,xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen)
+        init_mask_loss = mask_eval(fullmask_b.clone().detach(),xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen)
     elif testmode == 'sigpy':
-        init_mask_loss = mask_eval(fullmask_b,xstar,mode='sigpy',hfen=hfen)
+        init_mask_loss = mask_eval(fullmask_b.clone().detach(),xstar,mode='sigpy',hfen=hfen)
     if (testmode is not None) and verbose:
         print('loss of the input mask: ', init_mask_loss)
 
@@ -223,9 +223,6 @@ def mask_backward(highmask,xstar,\
             z[ind,:,:] = torch.tensordot( torch.diag(fullmask[ind,:]).to(y.dtype),y[ind,:,:],dims=([1],[0]) )
         z = F.ifftshift(z , dim=(1,2)) 
         ## Reconstruction process
-#         if mode == 'ADMM':
-#             x   = ADMM_TV(z,fullmask,maxIter=unroll_block,Lambda=Lambda,rho=rho,imgInput=False,x_init=None)
-#             x = learnable_unrolled_algo(z,fullmask) # maybe PDHG
         if mode == 'UNET':
             if UNET.n_channels == 2:
                 zcp = torch.zeros((batchsize,2,imgHeg,imgWid),dtype=dtyp)
@@ -255,7 +252,7 @@ def mask_backward(highmask,xstar,\
         loss.backward()    
         fullmask_old = mask_makebinary(fullmask.detach().numpy(),threshold=0.5,sigma=False) 
         optimizer.step()
-        fullmask = binarize(mask_complete(torch.sigmoid(slope*M_high),imgHeg,dtyp=dtyp))
+        fullmask = binarize( mask_complete(torch.sigmoid(slope*M_high),imgHeg,dtyp=dtyp) )
         
         #################################
         ## track training process, and printing information

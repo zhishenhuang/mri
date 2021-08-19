@@ -30,8 +30,8 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                                       maxRep=5,lr_mn=1e-4,\
                                       epoch=1,batchsize=5,valbatchsize=5,\
                                       corefreq=24,budget=56,\
-                                      verbose=False,hfen=False,dtyp=torch.float,\
-                                      save_cp=False,count_start=(0,0)):
+                                      verbose=False,hfen=False,dtyp=torch.float,validate_every=30,\
+                                      save_cp=False,count_start=(0,0),histpath=None):
     '''
     alpha: magnitude of l1 penalty for high-frequency mask
     mnet : the input mnet must match corefreq exactly
@@ -54,8 +54,17 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
     epoch_count = count_start[0]
     batchind    = count_start[1]
     batch_nums  = int(np.ceil(trainfulls.shape[0]/batchsize))
-    loss_before = list([]); loss_after = list([]); loss_rand = list([]); loss_val = list([])
     
+    if histpath is None:
+        loss_before = list([]); loss_after = list([]); loss_rand = list([]); loss_val = list([])
+    else:
+        histRec     = np.load(histpath)
+        loss_before = list(histRec['loss_before'])
+        loss_after  = list(histRec['loss_after'])
+        loss_rand   = list(histRec['loss_rand'])
+        loss_val    = list(histRec['loss_val'])
+        print('training history file successfully loaded from the path: ', histpath)
+        
     try:
         while epoch_count<epoch:
             while batchind<batch_nums:
@@ -123,43 +132,44 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                     print(iterprog+' is a VALID step!')
                 else:
                     print(iterprog+' is an invalid step!')
-                                   
-                if (global_step%10==0) and save_cp:
+                
+            ########################################
+            ## Validation after each epoch
+            # use mnet to generate mask for validation set
+                if global_step%validate_every == 0:
+                    valerr = 0
+                    valbatchind   = 0
+                    valbatch_nums = int(np.ceil(valfulls.shape[0]/valbatchsize))
+                    while valbatchind < valbatch_nums:
+                        batch = np.arange(valbatchsize*valbatchind, min(valbatchsize*(valbatchind+1),valfulls.shape[0]))
+                        xstar = valfulls[batch,:,:]
+                        if val_yfulls is None:
+                            yfull = torch.fft.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho')) # y is ROLLED!
+                        else:
+                            yfull = torch.fft.fftshift(val_yfulls[batch,:,:],dim=(1,2))
+                        lowfreqmask,_,_ = mask_naiveRand(xstar.shape[1],fix=corefreq,other=0,roll=True)
+                        imgshape = (xstar.shape[1],xstar.shape[2])
+                        if mnet.in_channels == 1:
+                            x_lf     = get_x_f_from_yfull(lowfreqmask,yfull)
+                            mask_val = mnet_wrapper(mnet,x_lf,budget,imgshape,normalize=True,detach=True)
+                        elif mnet.in_channels == 2:
+                            y = torch.zeros((yfull.shape[0],2,yfull.shape[1],yfull.shape[2]),dtype=torch.float)
+                            y[:,0,lowfreqmask==1,:] = torch.real(yfull)[:,lowfreqmask==1,:]
+                            y[:,1,lowfreqmask==1,:] = torch.imag(yfull)[:,lowfreqmask==1,:]
+                            mask_val = mnet_wrapper(mnet,y,budget,imgshape,normalize=True,detach=True)
+                        valerr += mask_eval(mask_val,xstar,mode='sigpy',Lambda=1e-4,dtyp=dtyp,hfen=hfen) # evaluation the equality of mnet masks
+                        valbatchind += 1
+                    loss_val.append(valerr/valbatch_nums)
+                    print(f'\n [{global_step+1}][{epoch_count+1}/{epoch}] validation error: {valerr/valbatch_nums} \n')
+            ########################################                     
+                if save_cp and ( (global_step%10==0) or (batchind==(batch_nums-1)) ):
                     torch.save({'model_state_dict': mnet.state_dict()}, dir_checkpoint + 'mnet_split_trained_cf'+ str(corefreq)+'_bg_'+str(budget) +'.pt')
                     torch.save({'model_state_dict': unet.state_dict()}, dir_checkpoint + 'unet_split_trained_cf'+ str(corefreq)+'_bg_'+str(budget)+'.pt')
                     print(f'\t Checkpoint saved at epoch {epoch_count+1}, iter {global_step + 1}, batchind {batchind+1}!')
                     filepath = '/home/huangz78/checkpoints/alternating_update_error_track_'+acceleration_fold+'fold.npz'
                     np.savez(filepath,loss_rand=loss_rand,loss_after=loss_after,loss_before=loss_before,loss_val=loss_val)
                 global_step += 1
-                batchind += 1
-            ########################################
-            ## Validation after each epoch
-            # use mnet to generate mask for validation set
-            valerr = 0
-            valbatchind   = 0
-            valbatch_nums = int(np.ceil(valfulls.shape[0]/valbatchsize))
-            while valbatchind < valbatch_nums:
-                batch = np.arange(valbatchsize*valbatchind, min(valbatchsize*(valbatchind+1),valfulls.shape[0]))
-                xstar = valfulls[batch,:,:]
-                if val_yfulls is None:
-                    yfull = torch.fft.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho')) # y is ROLLED!
-                else:
-                    yfull = torch.fft.fftshift(val_yfulls[batch,:,:],dim=(1,2))
-                lowfreqmask,_,_ = mask_naiveRand(xstar.shape[1],fix=corefreq,other=0,roll=True)
-                imgshape = (xstar.shape[1],xstar.shape[2])
-                if mnet.in_channels == 1:
-                    x_lf     = get_x_f_from_yfull(lowfreqmask,yfull)
-                    mask_val = mnet_wrapper(mnet,x_lf,budget,imgshape,normalize=True,detach=True)
-                elif mnet.in_channels == 2:
-                    y = torch.zeros((yfull.shape[0],2,yfull.shape[1],yfull.shape[2]),dtype=torch.float)
-                    y[:,0,lowfreqmask==1,:] = torch.real(yfull)[:,lowfreqmask==1,:]
-                    y[:,1,lowfreqmask==1,:] = torch.imag(yfull)[:,lowfreqmask==1,:]
-                    mask_val = mnet_wrapper(mnet,y,budget,imgshape,normalize=True,detach=True)
-                valerr += mask_eval(mask_val,xstar,mode='sigpy',Lambda=1e-4,dtyp=dtyp,hfen=hfen) # evaluation the equality of mnet masks
-                valbatchind += 1
-            loss_val.append(valerr/valbatch_nums)
-            print(f'\n [{epoch_count+1}/{epoch}] validation error: {valerr/valbatch_nums} \n')
-            ########################################            
+                batchind += 1                       
             batchind = 0
             epoch_count += 1
     except KeyboardInterrupt: # need debug
@@ -181,7 +191,7 @@ def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     
-    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=3,
+    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=5,
                         help='Number of epochs', dest='epochs')
     parser.add_argument('-b', '--batch-size', metavar='B', type=int, nargs='?', default=5,
                         help='Batch size', dest='batchsize')
@@ -199,16 +209,21 @@ def get_args():
                         help='path file for a mnet', dest='mnetpath')
     parser.add_argument('-up', '--unet-path', type=str, default='/home/huangz78/checkpoints/unet_1_True.pth',
                         help='path file for a unet', dest='unetpath')
+    parser.add_argument('-hp', '--history-path', type=str, default=None,
+                        help='path file for npz file recording training history', dest='histpath')
+    
     parser.add_argument('-mbit', '--mb-iter-max', type=int, default=30,
                         help='maximum interation for maskbackward function', dest='maxItermb')
     parser.add_argument('-mnrep', '--mn-iter-rep', type=int, default=30,
-                        help='inside one batch, updating mnet this many times', dest='mnRep')
-    
+                        help='inside one batch, updating mnet this many times', dest='mnRep')   
+    parser.add_argument('-valfreq', '--validate-every', type=int, default=30,
+                        help='do validation every # steps', dest='validate_every')
     
     parser.add_argument('-bs','--base-size',metavar='BS',type=int,nargs='?',default=8,
                         help='number of observed low frequencies', dest='base_freq')
     parser.add_argument('-bg','--budget',metavar='BG',type=int,nargs='?',default=32,
                         help='number of high frequencies to sample', dest='budget')
+    
     parser.add_argument('-alpha', '--alpha-param', type=float, default=1e-4,
                         help='magnitude for l1 penalty in loss function', dest='alpha')    
     parser.add_argument('-c', '--c-param', type=float, default=1e-2,
@@ -265,9 +280,9 @@ if __name__=='__main__':
     
     # load validation data 
     val_dir = '/home/huangz78/data/testdata_x.npz'
-    val_xfull = torch.tensor(np.load(val_dir)['xfull'])[0:50]
+    val_xfull = torch.tensor(np.load(val_dir)['xfull'])
     val_dir = '/home/huangz78/data/testdata_y.npz'
-    val_yfull = torch.tensor(np.load(val_dir)['yfull'])[0:50]
+    val_yfull = torch.tensor(np.load(val_dir)['yfull'])
     print('validation data fft size:', val_yfull.shape)
     print('validation data size:', val_xfull.shape)
     
@@ -279,5 +294,7 @@ if __name__=='__main__':
                                   maxRep=args.mnRep,lr_mn=args.lrn,\
                                   corefreq=args.base_freq,budget=args.budget,\
                                   epoch=args.epochs,batchsize=args.batchsize,\
-                                  verbose=False,save_cp=True,count_start=(args.epoch_start,args.batchind_start))
+                                  validate_every=args.validate_every,\
+                                  verbose=False,save_cp=True,count_start=(args.epoch_start,args.batchind_start),\
+                                  histpath=args.histpath)
     print('\n ~Training concluded!')

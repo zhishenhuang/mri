@@ -132,15 +132,17 @@ def loupeTrain(traindata,valdata,\
                     print('Created checkpoint directory')
                 except OSError:
                     pass
-                torch.save({'model_state_dict': loupe.state_dict()}, dir_checkpoint + 'loupe_model.pt')
-                np.savez(dir_checkpoint+'loupe_history.npz',loss_train=train_loss, loss_val=val_loss)
+                info_str = 'spar_'+str(sparsity)+'_base_'+str(preselect_num)
+                torch.save({'model_state_dict': loupe.state_dict()}, dir_checkpoint + 'loupe_' + info_str + '.pt')
+                np.savez(dir_checkpoint +'loupe_' + info_str + '_history.npz', loss_train=train_loss, loss_val=val_loss)
                 print(f'\t Checkpoint for Loupe saved after epoch {epoch_count + 1}!' + '\n')
             epoch_count += 1
             batchind = 0
     except KeyboardInterrupt: # need debug
         print('Keyboard Interrupted! Exit ~')
-        torch.save({'model_state_dict': loupe.state_dict()}, dir_checkpoint + 'loupe_model.pt')
-        np.savez(dir_checkpoint+'loupe_history.npz',loss_train=train_loss, loss_val=val_loss)
+        info_str = 'spar_'+str(sparsity)+'_base_'+str(preselect_num)
+        torch.save({'model_state_dict': loupe.state_dict()}, dir_checkpoint + 'loupe_' + info_str + '.pt')
+        np.savez(dir_checkpoint +'loupe_' + info_str + '_history.npz', loss_train=train_loss, loss_val=val_loss)
         print('Model is saved after keyboard interruption~')
         try:
             sys.exit(0)
@@ -150,13 +152,13 @@ def loupeTrain(traindata,valdata,\
 def get_args():
     parser = argparse.ArgumentParser(description='Train the Loupe model',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=10,
+    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=20,
                         help='Number of epochs', dest='epochs')
     parser.add_argument('-bt', '--batch-size-train', metavar='BT', type=int, nargs='?', default=5,
                         help='Batch size train', dest='batchsize_train')
     parser.add_argument('-bv', '--batch-size-val', metavar='BV', type=int, nargs='?', default=5,
                         help='Batch size val', dest='batchsize_val')
-    parser.add_argument('-lrm', '--learning-rate-mask', metavar='LRM', type=float, nargs='?', default=5e-4,
+    parser.add_argument('-lrm', '--learning-rate-mask', metavar='LRM', type=float, nargs='?', default=1e-3,
                         help='Learning rate mask', dest='lrm')
     parser.add_argument('-lru', '--learning-rate-unet', metavar='LRU', type=float, nargs='?', default=1e-4,
                         help='Learning rate unet', dest='lru')
@@ -166,7 +168,7 @@ def get_args():
                         help='sparsity', dest='sparsity')
     parser.add_argument('-core', '--preselect-num', type=int, default=24,
                         help='preselected number of low frequencies', dest='preselect_num')
-    parser.add_argument('-sl', '--slope', type=float, default=5,
+    parser.add_argument('-sl', '--slope', type=float, default=1,
                         help='slope used in the sigmoid function', dest='slope')
     parser.add_argument('-mp', '--model-path', type=str, default=None,
                         help='path file for a loupe model', dest='modelpath')
@@ -204,7 +206,7 @@ if __name__ == '__main__':
 
     preselect  = True if args.preselect_num > 0 else False
    
-    loupeTrain(trainxfull,testxfull[0:20],\
+    loupeTrain(trainxfull,testxfull,\
                slope=args.slope, sparsity=args.sparsity, preselect=preselect, preselect_num=args.preselect_num,\
                unet_skip=args.unet_skip, n_channels=1,\
                lrm=args.lrm, lru=args.lru, weight_decay=0, momentum=0,\
