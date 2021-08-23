@@ -71,7 +71,8 @@ def mask_eval(fullmask,xstar,\
                   compare the reconstructed image in l2 norm
     the lower the output is, the better the mask is
     '''
-    
+    if UNET is not None:
+        UNET.eval()
     batchsize = xstar.shape[0]; imgHeg = xstar.shape[1]; imgWid = xstar.shape[2]
     for layer in range(batchsize):
         xstar[layer,:,:] = xstar[layer,:,:]/torch.max(torch.abs(xstar[layer,:,:].flatten()))
@@ -114,6 +115,8 @@ def mask_eval(fullmask,xstar,\
             error = (np.mean(err),np.mean(hfens))
         else:
             error = np.mean(err)
+    if UNET is not None:
+        UNET.train()
     return error
 
 
