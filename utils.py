@@ -68,11 +68,20 @@ def mnet_weights_init(m):
 #             print(classname,'6-1')
 #             nn.init.constant_(m.bias.data, 0)
 #             print(classname,'6-2')
+def setdiff1d(a,b):
+    '''
+    set difference between 1d Tensors a and b
+    elements in a and b are expected to be Unique
+    '''
+    comb = torch.cat((a,b))
+    uniques, counts = comb.unique(return_counts=True)
+    diffElems = uniques[counts==1]
+    return diffElems
 
-def sigmoid_binarize(M,threshold=0.5):
+def sigmoid_binarize(M,threshold=0.5,device='cpu'):
     sigmoid = nn.Sigmoid()
     mask = sigmoid(M)
-    mask_pred = torch.ones_like(mask)
+    mask_pred = torch.ones_like(mask,device=device)
     for ind in range(M.shape[0]):
         mask_pred[ind,mask[ind,:]<=threshold] = 0
     return mask_pred
@@ -266,7 +275,7 @@ def mask_naiveRand(imgHeg,fix=10,other=30,roll=False):
         mask = torch.fft.fftshift(mask)
         return mask,None,None
 
-def mask_makebinary(M,beta=1,threshold=0.5,sigma=True): # done
+def mask_makebinary(M,beta=1,threshold=0.5,sigma=True,device='cpu'): # done for gpu
     '''
     M: [#imgs, mask_dimension], e.g. [5 imgs, 320 lines in fullmask]
     return a mask in the form of binary vector
@@ -276,12 +285,12 @@ def mask_makebinary(M,beta=1,threshold=0.5,sigma=True): # done
         Mval = torch.sigmoid(beta*M)
     else:
         Mval = M
-    MASK = torch.ones(Mval.shape)
+    MASK = torch.ones(Mval.shape,device=device)
     for ind in range(M.shape[0]):
         MASK[ind,Mval[ind,:]<=threshold] = 0
     return MASK
 
-def mask_complete(highmask,imgHeg,rolled=True,dtyp=torch.float): # done
+def mask_complete(highmask,imgHeg,rolled=True,dtyp=torch.float,device='cpu'): # done for gpu
     '''
     highmask: [#imgs, mask_dimension], e.g. [5 imgs, 296 lines in highmask]
     mold the highmask into a complete full length mask
@@ -289,16 +298,18 @@ def mask_complete(highmask,imgHeg,rolled=True,dtyp=torch.float): # done
     '''
     layer = highmask.shape[0]
     base  = imgHeg - highmask.size()[1]
-    fullmask = torch.zeros((layer,imgHeg),dtype=dtyp)
+    fullmask = torch.zeros((layer,imgHeg),dtype=dtyp,device=device)
     if rolled:
-        coreInds = np.arange(int(imgHeg/2)-int(base/2), int(imgHeg/2)+int(base/2))
+        coreInds = torch.arange(int(imgHeg/2)-int(base/2), int(imgHeg/2)+int(base/2),1,device=device)
+#         coreInds = np.arange(int(imgHeg/2)-int(base/2), int(imgHeg/2)+int(base/2))
     else:
-        coreInds = np.concatenate((np.arange(0,base//2),np.arange(Heg-1,Heg-1-base//2-base%2,-1)))
+        coreInds = torch.cat((torch.arange(0,base//2,1,device=device),torch.arange(Heg-1,Heg-1-base//2-base%2,-1,device=device)))
+#         coreInds = np.concatenate((np.arange(0,base//2),np.arange(Heg-1,Heg-1-base//2-base%2,-1)))
     fullmask[:,coreInds] = 1
-    fullmask[:,np.setdiff1d(np.arange(imgHeg),coreInds)] = highmask
+    fullmask[:,setdiff1d(torch.arange(0,imgHeg,device=device),coreInds)] = highmask
     return fullmask
 
-def mask_filter(M,base=10,roll=False): # done
+def mask_filter(M,base=10,roll=False,device='cpu'): # done for gpu
     '''
     M:  input mask, a vector or a matrix. 
         If it is a matrix, the second dimension is assumed to be the mask dimension.
@@ -308,22 +319,23 @@ def mask_filter(M,base=10,roll=False): # done
     if len(M.shape)==1:
         Heg = M.shape[0]
         if roll:
-            coreInds = np.arange(int(Heg//2)-int(base//2), int(Heg//2)+int(base//2)+base%2)
+            coreInds = torch.arange(int(Heg//2)-int(base//2), int(Heg//2)+int(base//2)+base%2,device=device)
         else:
-            coreInds = np.concatenate((np.arange(0,base//2),np.arange(Heg-1,Heg-1-base//2-base%2,-1)))
-        M_high = M[np.setdiff1d(np.arange(Heg),coreInds)]  
+            coreInds = torch.cat((torch.arange(0,base//2,device=device),torch.arange(Heg-1,Heg-1-base//2-base%2,-1,device=device)))
+        M_high = M[setdiff1d(torch.arange(0,Heg,device=device),coreInds)]  
         
     elif len(M.shape)==2:
         Heg = M.shape[1]
         if roll:
-            coreInds = np.arange(int(Heg//2)-int(base//2), int(Heg//2)+int(base//2)+base%2)
+            coreInds = torch.arange(int(Heg//2)-int(base//2), int(Heg//2)+int(base//2)+base%2,device=device)
         else:
-            coreInds = np.concatenate((np.arange(0,base//2),np.arange(Heg-1,Heg-1-base//2-base%2,-1)))
-        M_high = M[:,np.setdiff1d(np.arange(Heg),coreInds)]
+            coreInds = torch.cat((torch.arange(0,base//2,device=device),torch.arange(Heg-1,Heg-1-base//2-base%2,-1,device=device)))
+        M_high = M[:,setdiff1d(torch.arange(0,Heg,device=device),coreInds)]
         
     return M_high
 
-def raw_normalize(M,budget,threshold=0.5): # done
+
+def raw_normalize(M,budget,threshold=0.5,device='cpu'): # done for gpu
     '''
     M: full mask with shape [#images, imgHeg]
     budget: how many frequencies to sample
@@ -331,6 +343,7 @@ def raw_normalize(M,budget,threshold=0.5): # done
     to be applied after sigmoid but before binarize!
     '''
     d = M.shape[1]
+    allinds  = torch.arange(0,d,1,device=device)
     assert(budget <= d)
     alpha = budget/d
     with torch.no_grad():
@@ -338,25 +351,29 @@ def raw_normalize(M,budget,threshold=0.5): # done
             nnz  = torch.sum(M[ind,:]>threshold)
             pbar = nnz/d
             if  nnz >= budget:
-                sampinds  = np.argsort(M[ind,:].detach().numpy())[::-1][0:budget]
-                eraseinds = np.setdiff1d(np.arange(0,M.shape[1],1),sampinds)
+                sampinds  = torch.argsort(M[ind,:],descending=True)[0:budget]
+                eraseinds = setdiff1d(allinds,sampinds)
+#                 sampinds  = np.argsort(M[ind,:].clone().detach().numpy())[::-1][0:budget]
+#                 eraseinds = np.setdiff1d(np.arange(0,M.shape[1],1),sampinds)
                 M[ind,eraseinds] = 0
             elif nnz < budget:
                 M_tmp = 1-(1-alpha)/(1-pbar)*(1-M[ind,:])
-                sampinds  = np.argsort(M_tmp.detach().numpy())[::-1][0:budget]
-                eraseinds = np.setdiff1d(np.arange(0,M_tmp.shape[0],1),sampinds)
-                M_out = torch.ones_like(M_tmp)
+                sampinds  = torch.argsort(M_tmp,descending=True)[0:budget]              
+                eraseinds = setdiff1d(allinds,sampinds)
+#                 sampinds  = np.argsort(M_tmp.detach().numpy())[::-1][0:budget]
+#                 eraseinds = np.setdiff1d(np.arange(0,M_tmp.shape[0],1),sampinds)
+                M_out = torch.ones_like(M_tmp,device=device)
                 M_out[eraseinds] = 0
                 M[ind,:] = M_out
     return M
 
-def get_x_f_from_yfull(mask,yfull,DTyp=torch.cfloat): # done
+def get_x_f_from_yfull(mask,yfull,DTyp=torch.cfloat,device='cpu'): # done for gpu
     '''
     yfull is assumed to be rolled!
     '''
     if len(mask.shape) == 1:
         mask = mask.repeat(yfull.shape[0],1)
-    subsamp_z = torch.zeros(yfull.shape).to(DTyp)
+    subsamp_z = torch.zeros(yfull.shape,device=device).to(DTyp)
     for ind in range(mask.shape[0]):
         subsamp_z[ind,mask[ind,:]==1,:] = yfull[ind,mask[ind,:]==1,:]
         # torch.tensordot( torch.diag(mask[ind,:]).to(DTyp),yfull[ind,:,:],dims=([1],[0]) )
@@ -364,25 +381,25 @@ def get_x_f_from_yfull(mask,yfull,DTyp=torch.cfloat): # done
     x_f = torch.abs(F.ifftn(z_f,dim=(1,2),norm='ortho'))
     return x_f
 
-def apply_mask(mask,yfull,mode='r'): # done
+def apply_mask(mask,yfull,mode='r',device='cpu'): # done for gpu
     '''
     yfull should have dimension (batchsize, Heg, Wid), and is assumed to be a complex image
     '''
     if len(mask.shape) == 1:
         mask = mask.repeat(yfull.shape[0],1)
-    subsamp_z = torch.zeros(yfull.shape).to(yfull.dtype)
+    subsamp_z = torch.zeros(yfull.shape,device=device).to(yfull.dtype)
     for ind in range(mask.shape[0]):
         subsamp_z[ind,mask[ind,:]==1,:] = yfull[ind,mask[ind,:]==1,:]
         # torch.tensordot( torch.diag(mask[ind,:]).to(DTyp),yfull[ind,:,:],dims=([1],[0]) )
     if mode == 'r':
-        z = torch.zeros((subsamp_z.shape[0],2,subsamp_z.shape[1],subsamp_z.shape[2]))
+        z = torch.zeros((subsamp_z.shape[0],2,subsamp_z.shape[1],subsamp_z.shape[2]),device=device)
         z[:,0,:,:] = torch.real(subsamp_z)
         z[:,1,:,:] = torch.imag(subsamp_z)
         return z
     elif mode == 'c':
-        return subsamp_z
+        return subsamp_z.to(device)
 
-def mnet_wrapper(mnet,z,budget,imgshape,dtyp=torch.float,normalize=False,detach=False): # done
+def mnet_wrapper(mnet,z,budget,imgshape,dtyp=torch.float,normalize=False,detach=False,device='cpu'): # done for gpu
     if len(z.shape)==3:
         highmask_raw  = torch.sigmoid( mnet( z.view(z.shape[0],mnet.in_channels,imgshape[0],imgshape[1]) ) )   
     elif len(z.shape)==4:
@@ -392,10 +409,10 @@ def mnet_wrapper(mnet,z,budget,imgshape,dtyp=torch.float,normalize=False,detach=
         highmask_raw = highmask_raw.detach()
         
     if normalize:
-        highmask = mask_makebinary( raw_normalize(highmask_raw,budget) , sigma=False )
+        highmask = mask_makebinary( raw_normalize(highmask_raw,budget,device=device) , sigma=False ,device=device)
     else:
-        highmask = mask_makebinary( highmask_raw , sigma=False )
-    mnetmask = mask_complete( highmask,imgshape[0],rolled=True,dtyp=dtyp )
+        highmask = mask_makebinary( highmask_raw , sigma=False ,device=device)
+    mnetmask = mask_complete( highmask,imgshape[0],rolled=True,dtyp=dtyp ,device=device)
     return mnetmask
 
 # warmup protocol
