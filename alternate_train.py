@@ -38,7 +38,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
     '''
     
     if val_yfulls is None:
-        val_yfulls = torch.fft.fftshift(F.fftn(valfulls,dim=(1,2),norm='ortho')) # y is ROLLED!
+        val_yfulls = torch.fft.fftshift(F.fftn(valfulls,dim=(1,2),norm='ortho'),dim=(1,2)) # y is ROLLED!
     else:
         val_yfulls = torch.fft.fftshift(val_yfulls,dim=(1,2))
 
@@ -71,7 +71,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                 batch = np.arange(batchsize*batchind, min(batchsize*(batchind+1),trainfulls.shape[0]))
                 xstar = trainfulls[batch,:,:]
                 if train_yfulls is None:
-                    yfull = torch.fft.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho')) # y is ROLLED!
+                    yfull = torch.fft.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho'),dim=(1,2)) # y is ROLLED!
                 else:
                     yfull = torch.fft.fftshift(train_yfulls[batch,:,:],dim=(1,2))
                 lowfreqmask,_,_ = mask_naiveRand(xstar.shape[1],fix=corefreq,other=0,roll=True)

@@ -435,8 +435,23 @@ def mask_pnorm(y,fix=10,other=30,p=2):
     mask[erasInd] = 0
     return mask,maskInd,erasInd
 
+def compute_l2err(x,xstar):
+    assert(x.shape==xstar.shape)
+    l2err = torch.zeros(len(x))
+    for ind in range(len(x)):
+        l2err[ind] = torch.norm(x[ind,:,:] - xstar[ind,:,:])/torch.norm(xstar[ind,:,:])
+    return l2err
+
+def compute_l1err(x,xstar):
+    assert(x.shape==xstar.shape)
+    l1err = torch.zeros(len(x))
+    for ind in range(len(x)):
+        l1err[ind] = torch.norm(x[ind,:,:] - xstar[ind,:,:],p=1)/torch.norm(xstar[ind,:,:],p=1)
+    return l1err
 
 def compute_hfen(recon: torch.Tensor,gt: torch.Tensor) -> np.ndarray:
+    gt    = gt.to(torch.cfloat)
+    recon = recon.to(torch.cfloat)
     LoG_GT    = ndimage.gaussian_laplace(np.real(gt), sigma=1)    + 1j*ndimage.gaussian_laplace(np.imag(gt), sigma=1)
     LoG_recon = ndimage.gaussian_laplace(np.real(recon), sigma=1) + 1j*ndimage.gaussian_laplace(np.imag(recon), sigma=1)
     return np.linalg.norm(LoG_recon - LoG_GT)/np.linalg.norm(LoG_GT)

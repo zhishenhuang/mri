@@ -38,7 +38,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
     '''
     
     if val_yfulls is None:
-        val_yfulls = torch.fft.fftshift(F.fftn(valfulls,dim=(1,2),norm='ortho')) # y is ROLLED!
+        val_yfulls = torch.fft.fftshift(F.fftn(valfulls,dim=(1,2),norm='ortho'),dim=(1,2)) # y is ROLLED!
     else:
         val_yfulls = torch.fft.fftshift(val_yfulls,dim=(1,2))
 
@@ -66,16 +66,16 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
         print('training history file successfully loaded from the path: ', histpath)
         
     try:
+        lowfreqmask = mask_naiveRand(trainfulls.shape[1],fix=corefreq,other=0,roll=True)[0].to(device)
         while epoch_count<epoch:
             while batchind<batch_nums:
-                batch = np.arange(batchsize*batchind, min(batchsize*(batchind+1),trainfulls.shape[0]))
+                batch = torch.arange(batchsize*batchind, min(batchsize*(batchind+1),trainfulls.shape[0]))
                 xstar = trainfulls[batch,:,:].to(device)
                 if train_yfulls is None:
-                    yfull = torch.fft.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho')) # y is ROLLED!
+                    yfull = torch.fft.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho'),dim=(1,2)) # y is ROLLED!
                 else:
                     yfull = torch.fft.fftshift(train_yfulls[batch,:,:],dim=(1,2))
-                lowfreqmask = mask_naiveRand(xstar.shape[1],fix=corefreq,other=0,roll=True)[0].to(device)
-
+                
                 ########################################  
                 ## (1) mask_backward
                 ######################################## 
@@ -90,7 +90,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                         y = torch.zeros((yfull.shape[0],2,yfull.shape[1],yfull.shape[2]),dtype=torch.float,device=device)
                         y[:,0,lowfreqmask==1,:] = torch.real(yfull)[:,lowfreqmask==1,:]
                         y[:,1,lowfreqmask==1,:] = torch.imag(yfull)[:,lowfreqmask==1,:]
-                        highmask = torch.sigmoid( mnet(y) ).to(device)
+                        highmask = torch.sigmoid( mnet(y) )
                 highmask_refined,unet,loss_aft,loss_bef = mask_backward(highmask,xstar,unet=unet,mnet=mnet,\
                                   beta=1.,alpha=alpha,c=c,\
                                   maxIter=maxIter_mb,seed=0,break_limit=np.inf,\
@@ -145,7 +145,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                         batch = np.arange(valbatchsize*valbatchind, min(valbatchsize*(valbatchind+1),valfulls.shape[0]))
                         xstar = valfulls[batch,:,:].to(device)
                         yfull = torch.fft.fftshift(val_yfulls[batch,:,:],dim=(1,2)).to(device)
-                        lowfreqmask = mask_naiveRand(xstar.shape[1],fix=corefreq,other=0,roll=True)[0].to(device)
+#                         lowfreqmask = mask_naiveRand(xstar.shape[1],fix=corefreq,other=0,roll=True)[0].to(device)
                         imgshape = (xstar.shape[1],xstar.shape[2])
                         if mnet.in_channels == 1:
                             x_lf     = get_x_f_from_yfull(lowfreqmask,yfull)
@@ -167,7 +167,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                     filepath = '/home/huangz78/checkpoints/alternating_update_error_track_'+acceleration_fold+'fold.npz'
                     np.savez(filepath,loss_rand=loss_rand,loss_after=loss_after,loss_before=loss_before,loss_val=loss_val)
                 global_step += 1
-                batchind += 1                       
+                batchind += 1               
             batchind = 0
             epoch_count += 1
     except KeyboardInterrupt: # need debug

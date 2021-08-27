@@ -58,7 +58,7 @@ def nrmse(x,xstar):
     '''
     input should be torch tensors
     '''
-    return torch.sqrt(torch.sum((torch.flatten(x)-torch.flatten(xstar) )**2))/torch.sqrt(torch.sum(torch.flatten(xstar)**2))    
+    return torch.sqrt(torch.sum((torch.flatten(x)-torch.flatten(xstar) )**2))/torch.sqrt(torch.sum(torch.flatten(xstar)**2))   
     
 def mask_eval(fullmask,xstar,\
               mode='UNET',UNET=None,dtyp=torch.float,\
@@ -100,6 +100,7 @@ def mask_eval(fullmask,xstar,\
             error = (nrmse(x,xstar).detach().item(),np.mean(hfens))
         else:
             error = nrmse(x,xstar).detach().item()
+            
     elif mode == 'sigpy': # mode is 'sigpy'
         mps = np.ones((1,imgHeg,imgWid))
         err = np.zeros(batchsize)
@@ -214,7 +215,7 @@ def mask_backward(highmask,xstar,\
     if testmode=='UNET':
         init_mask_loss = mask_eval(fullmask_b.clone().detach(),xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen,device=device)
     elif testmode == 'sigpy':
-        init_mask_loss = mask_eval(fullmask_b.clone().detach(),xstar,mode='sigpy',hfen=hfen,device=device)
+        init_mask_loss = mask_eval(fullmask_b.clone().detach(),xstar,mode='sigpy',hfen=hfen,device='cpu')
     if (testmode is not None) and verbose:
         print('loss of the input mask: ', init_mask_loss)
 
@@ -278,10 +279,6 @@ def mask_backward(highmask,xstar,\
         if verbose and (changed_rows>0): # if there is any changed rows, then it is reported in every iteration
             print('Iter {}, rows added: {}, rows reducted: {}, current samp. ratio: {}'.format(Iter+1,added_rows,reducted_rows,mask_sparsity))
                
-        if save_cp and (Iter%max(maxIter//10,1))==0:
-            dir_checkpoint = '/home/huangz78/mri/checkpoints/'
-            torch.save({'model_state_dict': UNET.state_dict()}, dir_checkpoint + 'unet_'+ str(UNET.n_channels) +'_by_mask.pth')
-            print(f'\t Checkpoint saved after Iter {Iter + 1}!')
         Iter += 1   
     
     if normalize:
