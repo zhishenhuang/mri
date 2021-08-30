@@ -399,7 +399,7 @@ def apply_mask(mask,yfull,mode='r',device='cpu'): # done for gpu
     elif mode == 'c':
         return subsamp_z.to(device)
 
-def mnet_wrapper(mnet,z,budget,imgshape,dtyp=torch.float,normalize=False,detach=False,device='cpu'): # done for gpu
+def mnet_wrapper(mnet,z,budget,imgshape,dtyp=torch.float,normalize=False,complete=True,detach=False,device='cpu'): # done for gpu
     if len(z.shape)==3:
         highmask_raw  = torch.sigmoid( mnet( z.view(z.shape[0],mnet.in_channels,imgshape[0],imgshape[1]) ) )   
     elif len(z.shape)==4:
@@ -412,28 +412,32 @@ def mnet_wrapper(mnet,z,budget,imgshape,dtyp=torch.float,normalize=False,detach=
         highmask = mask_makebinary( raw_normalize(highmask_raw,budget,device=device) , sigma=False ,device=device)
     else:
         highmask = mask_makebinary( highmask_raw , sigma=False ,device=device)
-    mnetmask = mask_complete( highmask,imgshape[0],rolled=True,dtyp=dtyp ,device=device)
+        
+    if complete:
+        mnetmask = mask_complete( highmask,imgshape[0],rolled=True,dtyp=dtyp ,device=device)
+    else:
+        mnetmask = highmask
     return mnetmask
 
 # warmup protocol
-def mask_pnorm(y,fix=10,other=30,p=2):
-    '''
-    This function returns a mask for the warmup purpose created based on energy per row of the k-space image
-    '''
-    imgHeg   = y.shape[0]
-    _, fixInds, _ = shiftsamp(fix,imgHeg)
-    energy   = torch.squeeze(torch.sum(torch.abs(y)**p,dim=1))
-    eRank    = torch.argsort(energy,descending=True).numpy()
-    IndsLeft = np.setdiff1d(eRank,fixInds)
-    yLeft    = y[IndsLeft,:,:]
-    energy   = torch.squeeze(torch.sum(torch.abs(yLeft)**p,dim=1))
-    eRank    = torch.argsort(energy,descending=True).numpy()
-    IndsSamp = eRank[0:other]
-    maskInd  = np.concatenate((fixInds,IndsSamp))
-    erasInd  = np.setdiff1d(np.arange(imgHeg),maskInd)
-    mask     = torch.ones(imgHeg)
-    mask[erasInd] = 0
-    return mask,maskInd,erasInd
+# def mask_pnorm(y,fix=10,other=30,p=2):
+#     '''
+#     This function returns a mask for the warmup purpose created based on energy per row of the k-space image
+#     '''
+#     imgHeg   = y.shape[0]
+#     _, fixInds, _ = shiftsamp(fix,imgHeg)
+#     energy   = torch.squeeze(torch.sum(torch.abs(y)**p,dim=1))
+#     eRank    = torch.argsort(energy,descending=True).numpy()
+#     IndsLeft = np.setdiff1d(eRank,fixInds)
+#     yLeft    = y[IndsLeft,:,:]
+#     energy   = torch.squeeze(torch.sum(torch.abs(yLeft)**p,dim=1))
+#     eRank    = torch.argsort(energy,descending=True).numpy()
+#     IndsSamp = eRank[0:other]
+#     maskInd  = np.concatenate((fixInds,IndsSamp))
+#     erasInd  = np.setdiff1d(np.arange(imgHeg),maskInd)
+#     mask     = torch.ones(imgHeg)
+#     mask[erasInd] = 0
+#     return mask,maskInd,erasInd
 
 def compute_l2err(x,xstar):
     assert(x.shape==xstar.shape)
@@ -450,8 +454,10 @@ def compute_l1err(x,xstar):
     return l1err
 
 def compute_hfen(recon: torch.Tensor,gt: torch.Tensor) -> np.ndarray:
-    gt    = gt.to(torch.cfloat)
-    recon = recon.to(torch.cfloat)
+    if type(recon) is torch.Tensor:
+        gt    = gt.to(torch.cfloat)
+    if type(gt) is torch.Tensor:
+        recon = recon.to(torch.cfloat)
     LoG_GT    = ndimage.gaussian_laplace(np.real(gt), sigma=1)    + 1j*ndimage.gaussian_laplace(np.imag(gt), sigma=1)
     LoG_recon = ndimage.gaussian_laplace(np.real(recon), sigma=1) + 1j*ndimage.gaussian_laplace(np.imag(recon), sigma=1)
     return np.linalg.norm(LoG_recon - LoG_GT)/np.linalg.norm(LoG_GT)

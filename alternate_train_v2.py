@@ -79,18 +79,18 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                 ########################################  
                 ## (1) mask_backward
                 ######################################## 
-                if (epoch_count == 0): # initialize highmask as random mask
-                    highmask = mask_filter(mask_naiveRand(xstar.shape[1],fix=corefreq,other=1.5*budget,roll=True)[0].to(device),base=corefreq,roll=True)
-                    highmask = highmask.repeat(xstar.shape[0],1)
-                else: # initialize highmask as output from mnet
-                    if mnet.in_channels == 1:
-                        x_lf     = get_x_f_from_yfull(lowfreqmask,yfull,device=device)
-                        highmask = torch.sigmoid( mnet(x_lf.view(batch.size,1,xstar.shape[1],xstar.shape[2])) ).to(device)
-                    elif mnet.in_channels == 2:
-                        y = torch.zeros((yfull.shape[0],2,yfull.shape[1],yfull.shape[2]),dtype=torch.float,device=device)
-                        y[:,0,lowfreqmask==1,:] = torch.real(yfull)[:,lowfreqmask==1,:]
-                        y[:,1,lowfreqmask==1,:] = torch.imag(yfull)[:,lowfreqmask==1,:]
-                        highmask = torch.sigmoid( mnet(y) )
+#                 if (epoch_count == 0): # initialize highmask as random mask
+#                     highmask = mask_filter(mask_naiveRand(xstar.shape[1],fix=corefreq,other=1.5*budget,roll=True)[0].to(device),base=corefreq,roll=True)
+#                     highmask = highmask.repeat(xstar.shape[0],1)
+#                 else: # initialize highmask as output from mnet
+                if mnet.in_channels   == 1:
+                    x_lf     = get_x_f_from_yfull(lowfreqmask,yfull,device=device)
+                    highmask = torch.sigmoid( mnet(x_lf.view(batch.size,1,xstar.shape[1],xstar.shape[2])) ).to(device)
+                elif mnet.in_channels == 2:
+                    y = torch.zeros((yfull.shape[0],2,yfull.shape[1],yfull.shape[2]),dtype=torch.float,device=device)
+                    y[:,0,lowfreqmask==1,:] = torch.real(yfull)[:,lowfreqmask==1,:]
+                    y[:,1,lowfreqmask==1,:] = torch.imag(yfull)[:,lowfreqmask==1,:]
+                    highmask = torch.sigmoid( mnet(y) ).detach()
                 highmask_refined,unet,loss_aft,loss_bef = mask_backward(highmask,xstar,unet=unet,mnet=mnet,\
                                   beta=1.,alpha=alpha,c=c,\
                                   maxIter=maxIter_mb,seed=0,break_limit=np.inf,\
@@ -133,38 +133,50 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                     print(iterprog+' is a VALID step!')
                 else:
                     print(iterprog+' is an invalid step!')
-                
+                if mnet.in_channels == 1:
+                    del xstar,yfull, x_lf
+                elif mnet.in_channels == 2:
+                    del xstar, yfull, y
+                if device != 'cpu':
+                    torch.cuda.empty_cache()
             ########################################
             ## Validation after each epoch
             # use mnet to generate mask for validation set
                 if (global_step%validate_every == 0) or (batchind==(batch_nums-1)):
-                    valerr = 0
-                    valbatchind   = 0
-                    valbatch_nums = int(np.ceil(valfulls.shape[0]/valbatchsize))
-                    while valbatchind < valbatch_nums:
-                        batch = np.arange(valbatchsize*valbatchind, min(valbatchsize*(valbatchind+1),valfulls.shape[0]))
-                        xstar = valfulls[batch,:,:].to(device)
-                        yfull = torch.fft.fftshift(val_yfulls[batch,:,:],dim=(1,2)).to(device)
-#                         lowfreqmask = mask_naiveRand(xstar.shape[1],fix=corefreq,other=0,roll=True)[0].to(device)
-                        imgshape = (xstar.shape[1],xstar.shape[2])
-                        if mnet.in_channels == 1:
-                            x_lf     = get_x_f_from_yfull(lowfreqmask,yfull)
-                            mask_val = mnet_wrapper(mnet,x_lf,budget,imgshape,normalize=True,detach=True,device=device)
-                        elif mnet.in_channels == 2:
-                            y = torch.zeros((yfull.shape[0],2,yfull.shape[1],yfull.shape[2]),dtype=torch.float,device=device)
-                            y[:,0,lowfreqmask==1,:] = torch.real(yfull)[:,lowfreqmask==1,:]
-                            y[:,1,lowfreqmask==1,:] = torch.imag(yfull)[:,lowfreqmask==1,:]
-                            mask_val = mnet_wrapper(mnet,y,budget,imgshape,normalize=True,detach=True,device=device)
-                        valerr += mask_eval(mask_val,xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen,device=device) # evaluation the equality of mnet masks
-                        valbatchind += 1
-                    loss_val.append(valerr/valbatch_nums)
-                    print(f'\n [{global_step+1}][{epoch_count+1}/{epoch}] validation error: {valerr/valbatch_nums} \n')
+                    with torch.no_grad():
+                        valerr = 0
+                        valbatchind   = 0
+                        valbatch_nums = int(np.ceil(valfulls.shape[0]/valbatchsize))
+                        while valbatchind < valbatch_nums:
+                            batch = np.arange(valbatchsize*valbatchind, min(valbatchsize*(valbatchind+1),valfulls.shape[0]))
+                            xstar = valfulls[batch,:,:].to(device)
+                            yfull = torch.fft.fftshift(val_yfulls[batch,:,:],dim=(1,2)).to(device)
+    #                         lowfreqmask = mask_naiveRand(xstar.shape[1],fix=corefreq,other=0,roll=True)[0].to(device)
+                            imgshape = (xstar.shape[1],xstar.shape[2])
+                            if mnet.in_channels == 1:
+                                x_lf     = get_x_f_from_yfull(lowfreqmask,yfull)
+                                mask_val = mnet_wrapper(mnet,x_lf,budget,imgshape,normalize=True,detach=True,device=device)
+                            elif mnet.in_channels == 2:
+                                y = torch.zeros((yfull.shape[0],2,yfull.shape[1],yfull.shape[2]),dtype=torch.float,device=device)
+                                y[:,0,lowfreqmask==1,:] = torch.real(yfull)[:,lowfreqmask==1,:]
+                                y[:,1,lowfreqmask==1,:] = torch.imag(yfull)[:,lowfreqmask==1,:]
+                                mask_val = mnet_wrapper(mnet,y,budget,imgshape,normalize=True,detach=True,device=device)
+                            valerr = valerr + mask_eval(mask_val,xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen,device=device) # evaluation the equality of mnet masks
+                            valbatchind += 1
+                            if mnet.in_channels == 1:
+                                del xstar,yfull, x_lf
+                            elif mnet.in_channels == 2:
+                                del xstar, yfull, y
+                        loss_val.append(valerr/valbatch_nums)
+                        print(f'\n [{global_step+1}][{epoch_count+1}/{epoch}] validation error: {valerr/valbatch_nums} \n')
+                        if device != 'cpu':
+                            torch.cuda.empty_cache()
             ########################################                     
                 if save_cp and ( (global_step%10==0) or (batchind==(batch_nums-1)) ):
-                    torch.save({'model_state_dict': mnet.state_dict()}, dir_checkpoint + 'mnet_split_trained_cf'+ str(corefreq)+'_bg_'+str(budget) +'.pt')
-                    torch.save({'model_state_dict': unet.state_dict()}, dir_checkpoint + 'unet_split_trained_cf'+ str(corefreq)+'_bg_'+str(budget)+'.pt')
+                    torch.save({'model_state_dict': mnet.state_dict()}, dir_checkpoint + 'mnet_split_trained_cf_'+ str(corefreq)+'_bg_'+str(budget)+ '_unet_in_chan_' + str(unet.n_channels) +'.pt')
+                    torch.save({'model_state_dict': unet.state_dict()}, dir_checkpoint + 'unet_split_trained_cf_'+ str(corefreq)+'_bg_'+str(budget)+ '_unet_in_chan_' + str(unet.n_channels) +'.pt')
                     print(f'\t Checkpoint saved at epoch {epoch_count+1}, iter {global_step + 1}, batchind {batchind+1}!')
-                    filepath = '/home/huangz78/checkpoints/alternating_update_error_track_'+acceleration_fold+'fold.npz'
+                    filepath = '/home/huangz78/checkpoints/alternating_update_error_track_'+acceleration_fold+'fold_'+ 'unet_in_chan_' + str(unet.n_channels) + '.npz'
                     np.savez(filepath,loss_rand=loss_rand,loss_after=loss_after,loss_before=loss_before,loss_val=loss_val)
                 global_step += 1
                 batchind += 1               
@@ -173,10 +185,10 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
     except KeyboardInterrupt: # need debug
         print('Keyboard Interrupted! Exit~')
         if save_cp:
-            torch.save({'model_state_dict': mnet.state_dict()}, dir_checkpoint + 'mnet_split_trained_cf'+ str(corefreq)+'_bg_'+str(budget) +'.pt')
-            torch.save({'model_state_dict': unet.state_dict()}, dir_checkpoint + 'unet_split_trained_cf'+ str(corefreq)+'_bg_'+str(budget)+'.pt')
+            torch.save({'model_state_dict': mnet.state_dict()}, dir_checkpoint + 'mnet_split_trained_cf_'+ str(corefreq)+'_bg_'+str(budget) + '_unet_in_chan_' + str(unet.n_channels) +'.pt')
+            torch.save({'model_state_dict': unet.state_dict()}, dir_checkpoint + 'unet_split_trained_cf_'+ str(corefreq)+'_bg_'+str(budget) + '_unet_in_chan_' + str(unet.n_channels) +'.pt')
             print(f'\t Checkpoint saved at Python epoch {epoch_count}, Python batchind {batchind}!')
-            filepath = '/home/huangz78/checkpoints/alternating_update_error_track_'+acceleration_fold+'fold.npz'
+            filepath = '/home/huangz78/checkpoints/alternating_update_error_track_'+acceleration_fold+'fold'+ 'unet_in_chan_' + str(unet.n_channels) +'.npz'
             np.savez(filepath,loss_rand=loss_rand,loss_after=loss_after,loss_before=loss_before,loss_val=loss_val)
             print('Model is saved after interrupt~')
         try:
@@ -189,9 +201,9 @@ def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     
-    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=3,
+    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=2,
                         help='Number of epochs', dest='epochs')
-    parser.add_argument('-b', '--batch-size', metavar='B', type=int, nargs='?', default=5,
+    parser.add_argument('-b', '--batch-size', metavar='B', type=int, nargs='?', default=10,
                         help='Batch size', dest='batchsize')
     parser.add_argument('-lrb', '--learning-rate-backward', metavar='LRB', type=float, nargs='?', default=1e-2,
                         help='Learning rate for maskbackward', dest='lrb')
@@ -212,7 +224,7 @@ def get_args():
     
     parser.add_argument('-mbit', '--mb-iter-max', type=int, default=30,
                         help='maximum interation for maskbackward function', dest='maxItermb')
-    parser.add_argument('-mnrep', '--mn-iter-rep', type=int, default=15,
+    parser.add_argument('-mnrep', '--mn-iter-rep', type=int, default=20,
                         help='inside one batch, updating mnet this many times', dest='mnRep')   
     parser.add_argument('-valfreq', '--validate-every', type=int, default=100,
                         help='do validation every # steps', dest='validate_every')
@@ -222,16 +234,20 @@ def get_args():
     parser.add_argument('-bg','--budget',metavar='BG',type=int,nargs='?',default=32,
                         help='number of high frequencies to sample', dest='budget')
     
-    parser.add_argument('-alpha', '--alpha-param', type=float, default=1e-4,
+    parser.add_argument('-alpha', '--alpha-param', type=float, default=10**(-3.9),
                         help='magnitude for l1 penalty in loss function', dest='alpha')    
     parser.add_argument('-c', '--c-param', type=float, default=1e-2,
                         help='magnitude for consistency penalty in loss function', dest='c')
     
     parser.add_argument('-ngpu', '--num-gpu', type=int, default=0,
                         help='number of GPUs', dest='ngpu')
+    parser.add_argument('-uc', '--unet-channels', type=int, default=1,
+                        help='number of Unet input channcels', dest='n_channels')
+    parser.add_argument('-skip', '--unet-skip', type=str, default='False',
+                        help='switch for ResNet structure in Unet', dest='skip')
     
-    # alpha 1e-4, c 1e-2   ---> 8-fold
-    # alpha 1e-3.9, c 1e-1 ---> 4-fold
+    # alpha 1e-4, c 1e-2   ---> unet n_channel: 1
+    # alpha 1e-3.9, c 1e-2 ---> unet n_channel: 1
     
     return parser.parse_args()
 
@@ -239,6 +255,11 @@ def get_args():
 if __name__=='__main__':
     args = get_args()
     print(args)
+    
+    if args.skip == 'False':
+        args.skip = False
+    elif args.skip == 'True':
+        args.skip = True
 
     device = torch.device("cuda:0" if (torch.cuda.is_available() and args.ngpu > 0) else "cpu")
     
@@ -255,7 +276,7 @@ if __name__=='__main__':
     mnet.eval()
     
     ### load a unet for maskbackward
-    UNET = UNet(n_channels=1,n_classes=1,bilinear=False,skip=True).to(device)
+    UNET = UNet(n_channels=args.n_channels,n_classes=1,bilinear=(not args.skip),skip=args.skip).to(device)
     unetpath = args.unetpath
     if unetpath is not None:
         checkpoint = torch.load(unetpath)

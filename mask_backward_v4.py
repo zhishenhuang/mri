@@ -71,53 +71,53 @@ def mask_eval(fullmask,xstar,\
                   compare the reconstructed image in l2 norm
     the lower the output is, the better the mask is
     '''
-    if UNET is not None:
-        UNET.eval()
-    batchsize = xstar.shape[0]; imgHeg = xstar.shape[1]; imgWid = xstar.shape[2]
-    for layer in range(batchsize):
-        xstar[layer,:,:] = xstar[layer,:,:]/torch.max(torch.abs(xstar[layer,:,:].flatten()))
-    y = torch.fft.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho'),dim=(1,2))    
-    z = torch.zeros(y.shape,device=device).to(y.dtype)
-    for ind in range(batchsize):
-        z[ind,fullmask[ind,:]==1,:] = y[ind,fullmask[ind,:]==1,:]   
-    if mode=='UNET' and (UNET is not None):
-        z = torch.fft.ifftshift(z , dim=(1,2)) 
-        if UNET.n_channels == 2:
-            zcp = torch.zeros((batchsize,2,imgHeg,imgWid),dtype=dtyp,device=device)
-            zcp[:,0,:,:] = torch.real(z)
-            zcp[:,1,:,:] = torch.imag(z)
-            zprime = UNET(zcp).detach()
-            zrecon = zprime[:,0,:,:] + 1j*zprime[:,1,:,:]
-            x = torch.abs(F.ifftn(zrecon,dim=(1,2),norm='ortho'))
-        elif UNET.n_channels == 1:
-            x_ifft = torch.abs( F.ifftn(z,dim=(1,2),norm='ortho') ) 
-            x_in = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
-            x = UNET(x_in).detach()
-        if hfen:
-            hfens = np.zeros(batchsize)
-            for ind in range(batchsize):
-                hfens = compute_hfen(x[ind,0,:,:],xstar[ind,:,:])
-            error = (nrmse(x,xstar).detach().item(),np.mean(hfens))
-        else:
-            error = nrmse(x,xstar).detach().item()
-            
-    elif mode == 'sigpy': # mode is 'sigpy'
-        mps = np.ones((1,imgHeg,imgWid))
-        err = np.zeros(batchsize)
-        hfens = np.zeros(batchsize)
-        xstar = xstar.numpy()
+    with torch.no_grad():
+        if UNET is not None:
+            UNET.eval()
+        batchsize = xstar.shape[0]; imgHeg = xstar.shape[1]; imgWid = xstar.shape[2]
+        for layer in range(batchsize):
+            xstar[layer,:,:] = xstar[layer,:,:]/torch.max(torch.abs(xstar[layer,:,:].flatten()))
+        y = torch.fft.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho'),dim=(1,2))    
+        z = torch.zeros(y.shape,device=device).to(y.dtype)
         for ind in range(batchsize):
-            y_tmp    = z[ind,:,:].view(-1,imgHeg,imgWid).numpy()
-            x_tmp    = np.fft.ifftshift( np.abs(TotalVariationRecon(y_tmp, mps, Lambda,show_pbar=False).run()) )  
-            err[ind] = np.linalg.norm(x_tmp - xstar[ind,:,:],'fro')/np.linalg.norm(xstar[ind,:,:],'fro')
+            z[ind,fullmask[ind,:]==1,:] = y[ind,fullmask[ind,:]==1,:]   
+        if mode=='UNET' and (UNET is not None):
+            z = torch.fft.ifftshift(z , dim=(1,2)) 
+            if UNET.n_channels == 2:
+                x_ifft = F.ifftn(z,dim=(1,2),norm='ortho') 
+                x_in   = torch.zeros((batchsize,2,imgHeg,imgWid),dtype=dtyp,device=device)
+                x_in[:,0,:,:] = torch.real(x_ifft)
+                x_in[:,1,:,:] = torch.imag(x_ifft)           
+            elif UNET.n_channels == 1:
+                x_ifft = torch.abs( F.ifftn(z,dim=(1,2),norm='ortho') ) 
+                x_in   = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
+            x = UNET(x_in).detach()
+
             if hfen:
-                hfens[ind] = compute_hfen(x_tmp,xstar[ind,:,:])  
-        if hfen:
-            error = (np.mean(err),np.mean(hfens))
-        else:
-            error = np.mean(err)
-    if UNET is not None:
-        UNET.train()
+                hfens = np.zeros(batchsize)
+                for ind in range(batchsize):
+                    hfens = compute_hfen(x[ind,0,:,:],xstar[ind,:,:])
+                error = (nrmse(x,xstar).detach().item(),np.mean(hfens))
+            else:
+                error = nrmse(x,xstar).detach().item()
+
+        elif mode == 'sigpy': # mode is 'sigpy'
+            mps = np.ones((1,imgHeg,imgWid))
+            err = np.zeros(batchsize)
+            hfens = np.zeros(batchsize)
+            xstar = xstar.numpy()
+            for ind in range(batchsize):
+                y_tmp    = z[ind,:,:].view(-1,imgHeg,imgWid).numpy()
+                x_tmp    = np.fft.ifftshift( np.abs(TotalVariationRecon(y_tmp, mps, Lambda,show_pbar=False).run()) )  
+                err[ind] = np.linalg.norm(x_tmp - xstar[ind,:,:],'fro')/np.linalg.norm(xstar[ind,:,:],'fro')
+                if hfen:
+                    hfens[ind] = compute_hfen(x_tmp,xstar[ind,:,:])  
+            if hfen:
+                error = (np.mean(err),np.mean(hfens))
+            else:
+                error = np.mean(err)
+        if UNET is not None:
+            UNET.train()
     return error
 
 
@@ -179,12 +179,14 @@ def mask_backward(highmask,xstar,\
     corefreq = imgHeg - highmask.shape[1]
     lowfreqmask = mask_naiveRand(imgHeg,fix=corefreq,other=0,roll=True)[0].to(device)
     mnet.eval()
-    if mnet.in_channels == 1:        
-        x_lf      = get_x_f_from_yfull(lowfreqmask,y,device=device)
-        mask_pred = sigmoid_binarize(mnet(x_lf.view(batchsize,1,imgHeg,imgWid)).detach(),device=device)
-    elif mnet.in_channels == 2:
-        z         = apply_mask(lowfreqmask,y,device=device)
-        mask_pred = sigmoid_binarize(mnet(z).detach(),device=device)
+    with torch.no_grad():
+        imgshape = (imgHeg,imgWid)
+        if mnet.in_channels == 1:        
+            x_lf      = get_x_f_from_yfull(lowfreqmask,y,device=device)
+            mask_pred = mnet_wrapper(mnet,x_lf,budget,imgshape,normalize=True,complete=False,detach=True,device=device)
+        elif mnet.in_channels == 2:
+            z         = apply_mask(lowfreqmask,y,device=device)
+            mask_pred = mnet_wrapper(mnet,z,budget,imgshape,normalize=True,complete=False,detach=True,device=device)
     
     ## initialising M
     M_high = highmask.clone().detach().to(device)
@@ -230,20 +232,17 @@ def mask_backward(highmask,xstar,\
         ## Reconstruction process
         if mode == 'UNET':
             if UNET.n_channels == 2:
-                zcp = torch.zeros((batchsize,2,imgHeg,imgWid),dtype=dtyp,device=device)
-                zcp[:,0,:,:] = torch.real(z)
-                zcp[:,1,:,:] = torch.imag(z)
-                zprime = UNET(zcp)
-                zrecon = zprime[:,0,:,:] + 1j*zprime[:,1,:,:]
-                x      = torch.abs(F.ifftn(zrecon,dim=(1,2),norm='ortho'))
+                x_ifft = F.ifftn(z,dim=(1,2),norm='ortho')
+                x_in   = torch.zeros((batchsize,2,imgHeg,imgWid),dtype=dtyp,device=device)
+                x_in[:,0,:,:] = torch.real(x_ifft)
+                x_in[:,1,:,:] = torch.imag(x_ifft)              
             elif UNET.n_channels == 1:
                 x_ifft = torch.abs(F.ifftn(z,dim=(1,2),norm='ortho')) 
                 x_in   = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
-                x      = UNET(x_in)
+            x = UNET(x_in)
                 
         loss = beta * nrmse(x,xstar) + alpha * torch.norm(torch.sigmoid(slope*M_high),p=1) + c * criterion_mnet(slope*M_high.view(mask_pred.shape),mask_pred) 
     ## upper-level loss = nrmse + alpha * ||Mask_actual||_1 + c * mnet_pred_loss, where the last term is added to enforce consistency between mask_backward and mnet in the iteration process, May 7
-    ## Jul 13, torch.norm( sigmoid(M_high), p=1 ) --> unnecessary, because M_high is in [0,1].
     
         if loss.item() < loss_old:
             loss_old = loss.item()

@@ -1,7 +1,6 @@
 """ Full assembly of the parts to form the complete network """
 
 import torch.nn.functional as Func
-
 from unet_parts import *
 
 
@@ -37,10 +36,11 @@ class UNet(nn.Module):
             x = self.up2(x, x3)
             x = self.up3(x, x2)
             x = self.up4(x, x1)
+            logits = self.outc(x)
         else:
             x = self.up1(x5, x4) + x4
             x = self.up2(x, x3)  + x3
             x = self.up3(x, x2)  + x2
             x = self.up4(x, x1)  + x1
-        logits = self.outc(x) + x0
+            logits = self.outc(x) + x0        
         return logits
