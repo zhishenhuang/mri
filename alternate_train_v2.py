@@ -83,14 +83,17 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
 #                     highmask = mask_filter(mask_naiveRand(xstar.shape[1],fix=corefreq,other=1.5*budget,roll=True)[0].to(device),base=corefreq,roll=True)
 #                     highmask = highmask.repeat(xstar.shape[0],1)
 #                 else: # initialize highmask as output from mnet
-                if mnet.in_channels   == 1:
+                imgshape = (xstar.shape[1],xstar.shape[2])
+                if mnet.in_channels == 1:
                     x_lf     = get_x_f_from_yfull(lowfreqmask,yfull,device=device)
-                    highmask = torch.sigmoid( mnet(x_lf.view(batch.size,1,xstar.shape[1],xstar.shape[2])) ).to(device)
+                    highmask = mnet_wrapper(mnet,x_lf,budget,imgshape,normalize=True,complete=False,detach=True,device=device)
+#                     highmask = torch.sigmoid( mnet(x_lf.view(batch.size,1,xstar.shape[1],xstar.shape[2])) )
                 elif mnet.in_channels == 2:
                     y = torch.zeros((yfull.shape[0],2,yfull.shape[1],yfull.shape[2]),dtype=torch.float,device=device)
                     y[:,0,lowfreqmask==1,:] = torch.real(yfull)[:,lowfreqmask==1,:]
                     y[:,1,lowfreqmask==1,:] = torch.imag(yfull)[:,lowfreqmask==1,:]
-                    highmask = torch.sigmoid( mnet(y) ).detach()
+                    highmask = mnet_wrapper(mnet,y,budget,imgshape,normalize=True,complete=False,detach=True,device=device)
+#                     highmask = torch.sigmoid( mnet(y) ).detach()
                 highmask_refined,unet,loss_aft,loss_bef = mask_backward(highmask,xstar,unet=unet,mnet=mnet,\
                                   beta=1.,alpha=alpha,c=c,\
                                   maxIter=maxIter_mb,seed=0,break_limit=np.inf,\

@@ -370,6 +370,7 @@ def raw_normalize(M,budget,threshold=0.5,device='cpu'): # done for gpu
 def get_x_f_from_yfull(mask,yfull,DTyp=torch.cfloat,device='cpu'): # done for gpu
     '''
     yfull is assumed to be rolled!
+    apply mask and then compute ifft to get image
     '''
     if len(mask.shape) == 1:
         mask = mask.repeat(yfull.shape[0],1)
@@ -384,6 +385,8 @@ def get_x_f_from_yfull(mask,yfull,DTyp=torch.cfloat,device='cpu'): # done for gp
 def apply_mask(mask,yfull,mode='r',device='cpu'): # done for gpu
     '''
     yfull should have dimension (batchsize, Heg, Wid), and is assumed to be a complex image
+    'r' mode: output 2-channel info (one layer with real info and the other with imag info) as input to 2-channel mnet
+    'c' mode: output 1-channel complex info
     '''
     if len(mask.shape) == 1:
         mask = mask.repeat(yfull.shape[0],1)
