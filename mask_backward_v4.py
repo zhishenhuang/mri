@@ -189,33 +189,39 @@ def mask_backward(highmask,xstar,\
             mask_pred = mnet_wrapper(mnet,z,budget,imgshape,normalize=True,complete=False,detach=True,device=device)
     
     ## initialising M
-    M_high = highmask.clone().detach().to(device)
+    maskcontent = torch.unique(highmask)
+    if (maskcontent.sum()==1) and (maskcontent.prod()==0): # check if the input mask is binary
+        fullmask = mask_complete(highmask,imgHeg,dtyp=dtyp,device=device)
+        M_high   = highmask.clone().detach().to(device)
+        M_high[highmask==1] = .1 # inverse-sigmoid value
+        M_high[highmask==0] = -.1
+    else:
+        fullmask = binarize(mask_complete(torch.sigmoid(slope*highmask),imgHeg,dtyp=dtyp,device=device))
+        M_high   = highmask.clone().detach().to(device)
     M_high.requires_grad = True
-    fullmask = binarize(mask_complete(torch.sigmoid(slope*M_high),imgHeg,dtyp=dtyp,device=device))
     fullmask_b = fullmask.clone()
    
     if mode == 'UNET':
         if unet is None:
-            UNET =  UNet(n_channels=unet_mode,n_classes=unet_mode,bilinear=True,skip=False).to(device)
-            checkpoint = torch.load('/home/huangz78/mri/checkpoints/unet_'+ str(UNET.n_channels) +'.pth')
-            UNET.load_state_dict(checkpoint['model_state_dict'])
-            print('Unet loaded successfully from : ' + '/home/huangz78/mri/checkpoints/unet_'+ str(UNET.n_channels) +'.pth' )
-            UNET.train()
+            unet =  UNet(n_channels=unet_mode,n_classes=unet_mode,bilinear=True,skip=False).to(device)
+            checkpoint = torch.load('/home/huangz78/mri/checkpoints/unet_'+ str(unet.n_channels) +'.pth')
+            unet.load_state_dict(checkpoint['model_state_dict'])
+            print('Unet loaded successfully from : ' + '/home/huangz78/mri/checkpoints/unet_'+ str(unet.n_channels) +'.pth' )
+            unet.train()
 
             optimizer = optim.RMSprop([
                     {'params': M_high},
-                    {'params': UNET.parameters(),'lr':1e-4}
+                    {'params': unet.parameters(),'lr':1e-4}
                 ], lr=lr, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
         else:
-            UNET = unet
-            UNET.train()
+            unet.train()
             optimizer = optim.RMSprop([
                     {'params': M_high},
-                    {'params': UNET.parameters(),'lr':1e-4}
+                    {'params': unet.parameters(),'lr':1e-4}
                 ], lr=lr, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
 
     if testmode=='UNET':
-        init_mask_loss = mask_eval(fullmask_b.clone().detach(),xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen,device=device)
+        init_mask_loss = mask_eval(fullmask_b.clone().detach(),xstar,mode='UNET',UNET=unet,dtyp=dtyp,hfen=hfen,device=device)
     elif testmode == 'sigpy':
         init_mask_loss = mask_eval(fullmask_b.clone().detach(),xstar,mode='sigpy',hfen=hfen,device='cpu')
     if (testmode is not None) and verbose:
@@ -231,15 +237,15 @@ def mask_backward(highmask,xstar,\
         z = F.ifftshift(z , dim=(1,2)) 
         ## Reconstruction process
         if mode == 'UNET':
-            if UNET.n_channels == 2:
+            if unet.n_channels == 2:
                 x_ifft = F.ifftn(z,dim=(1,2),norm='ortho')
                 x_in   = torch.zeros((batchsize,2,imgHeg,imgWid),dtype=dtyp,device=device)
                 x_in[:,0,:,:] = torch.real(x_ifft)
                 x_in[:,1,:,:] = torch.imag(x_ifft)              
-            elif UNET.n_channels == 1:
+            elif unet.n_channels == 1:
                 x_ifft = torch.abs(F.ifftn(z,dim=(1,2),norm='ortho')) 
                 x_in   = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
-            x = UNET(x_in)
+            x = unet(x_in)
                 
         loss = beta * nrmse(x,xstar) + alpha * torch.norm(torch.sigmoid(slope*M_high),p=1) + c * criterion_mnet(slope*M_high.view(mask_pred.shape),mask_pred) 
     ## upper-level loss = nrmse + alpha * ||Mask_actual||_1 + c * mnet_pred_loss, where the last term is added to enforce consistency between mask_backward and mnet in the iteration process, May 7
@@ -288,7 +294,7 @@ def mask_backward(highmask,xstar,\
     mask_sparsity = torch.sum(highmask_refined).item()/(batchsize*imgHeg) + corefreq/imgHeg
 
     if testmode=='UNET':
-        mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp,device=device),xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen,device=device)
+        mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp,device=device),xstar,mode='UNET',UNET=unet,dtyp=dtyp,hfen=hfen,device=device)
     elif testmode == 'sigpy':
         mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp,device=device),xstar,mode='sigpy',hfen=hfen,device='cpu')
     if verbose and (testmode is not None):
@@ -301,5 +307,5 @@ def mask_backward(highmask,xstar,\
         if unet is None:
             return highmask_refined, mask_loss, init_mask_loss
         else:
-            return highmask_refined, UNET, mask_loss, init_mask_loss
+            return highmask_refined, unet, mask_loss, init_mask_loss
 

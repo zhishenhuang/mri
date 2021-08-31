@@ -41,7 +41,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
         val_yfulls = torch.fft.fftshift(F.fftn(valfulls,dim=(1,2),norm='ortho'),dim=(1,2)) # y is ROLLED!
     else:
         val_yfulls = torch.fft.fftshift(val_yfulls,dim=(1,2))
-
+    unet_init = copy.copy(unet)
     DTyp = torch.cfloat if dtyp==torch.float else torch.cdouble
     dir_checkpoint = '/home/huangz78/checkpoints/'
     criterion_mnet = nn.BCEWithLogitsLoss()
@@ -87,13 +87,13 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                 if mnet.in_channels == 1:
                     x_lf     = get_x_f_from_yfull(lowfreqmask,yfull,device=device)
                     highmask = mnet_wrapper(mnet,x_lf,budget,imgshape,normalize=True,complete=False,detach=True,device=device)
-#                     highmask = torch.sigmoid( mnet(x_lf.view(batch.size,1,xstar.shape[1],xstar.shape[2])) )
+#                     highmask =  mnet(x_lf.view(batch.size,1,xstar.shape[1],xstar.shape[2])).detach()
                 elif mnet.in_channels == 2:
                     y = torch.zeros((yfull.shape[0],2,yfull.shape[1],yfull.shape[2]),dtype=torch.float,device=device)
                     y[:,0,lowfreqmask==1,:] = torch.real(yfull)[:,lowfreqmask==1,:]
                     y[:,1,lowfreqmask==1,:] = torch.imag(yfull)[:,lowfreqmask==1,:]
                     highmask = mnet_wrapper(mnet,y,budget,imgshape,normalize=True,complete=False,detach=True,device=device)
-#                     highmask = torch.sigmoid( mnet(y) ).detach()
+#                     highmask =  mnet(y).detach()
                 highmask_refined,unet,loss_aft,loss_bef = mask_backward(highmask,xstar,unet=unet,mnet=mnet,\
                                   beta=1.,alpha=alpha,c=c,\
                                   maxIter=maxIter_mb,seed=0,break_limit=np.inf,\
@@ -105,7 +105,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                 iterprog  = f'[{global_step+1}][{epoch_count+1}/{epoch}][{min(batchsize*(batchind+1),trainfulls.shape[0])}/{trainfulls.shape[0]}]'
                 mask_rand = mask_naiveRand(xstar.shape[1],fix=corefreq,other=budget,roll=True)[0].to(device)
                 mask_rand = mask_rand.repeat(xstar.shape[0],1)
-                randqual  = mask_eval(mask_rand,xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen,device=device)
+                randqual  = mask_eval(mask_rand,xstar,mode='UNET',UNET=unet_init,dtyp=dtyp,hfen=hfen,device=device) # use fixed warmed-up unet as the reconstructor, Aug 30
                 print(iterprog + f', quality of old mnet mask : {loss_bef}')
                 print(iterprog + f', quality of refined  mask : {loss_aft}')
                 print(iterprog + f', quality of random   mask : {randqual}')
@@ -136,6 +136,11 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                     print(iterprog+' is a VALID step!')
                 else:
                     print(iterprog+' is an invalid step!')
+                
+                ########################################  
+                ## (3) update Unet_recon
+                ########################################
+                
                 if mnet.in_channels == 1:
                     del xstar,yfull, x_lf
                 elif mnet.in_channels == 2:
@@ -164,7 +169,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                                 y[:,0,lowfreqmask==1,:] = torch.real(yfull)[:,lowfreqmask==1,:]
                                 y[:,1,lowfreqmask==1,:] = torch.imag(yfull)[:,lowfreqmask==1,:]
                                 mask_val = mnet_wrapper(mnet,y,budget,imgshape,normalize=True,detach=True,device=device)
-                            valerr = valerr + mask_eval(mask_val,xstar,mode='UNET',UNET=UNET,dtyp=dtyp,hfen=hfen,device=device) # evaluation the equality of mnet masks
+                            valerr = valerr + mask_eval(mask_val,xstar,mode='UNET',UNET=unet,dtyp=dtyp,hfen=hfen,device=device) # evaluation the equality of mnet masks
                             valbatchind += 1
                             if mnet.in_channels == 1:
                                 del xstar,yfull, x_lf
@@ -227,7 +232,7 @@ def get_args():
     
     parser.add_argument('-mbit', '--mb-iter-max', type=int, default=30,
                         help='maximum interation for maskbackward function', dest='maxItermb')
-    parser.add_argument('-mnrep', '--mn-iter-rep', type=int, default=20,
+    parser.add_argument('-mnrep', '--mn-iter-rep', type=int, default=30,
                         help='inside one batch, updating mnet this many times', dest='mnRep')   
     parser.add_argument('-valfreq', '--validate-every', type=int, default=100,
                         help='do validation every # steps', dest='validate_every')
@@ -237,9 +242,9 @@ def get_args():
     parser.add_argument('-bg','--budget',metavar='BG',type=int,nargs='?',default=32,
                         help='number of high frequencies to sample', dest='budget')
     
-    parser.add_argument('-alpha', '--alpha-param', type=float, default=10**(-3.9),
+    parser.add_argument('-alpha', '--alpha-param', type=float, default=10**(-4.5),
                         help='magnitude for l1 penalty in loss function', dest='alpha')    
-    parser.add_argument('-c', '--c-param', type=float, default=1e-2,
+    parser.add_argument('-c', '--c-param', type=float, default=1e-3,
                         help='magnitude for consistency penalty in loss function', dest='c')
     
     parser.add_argument('-ngpu', '--num-gpu', type=int, default=0,
@@ -249,8 +254,8 @@ def get_args():
     parser.add_argument('-skip', '--unet-skip', type=str, default='False',
                         help='switch for ResNet structure in Unet', dest='skip')
     
-    # alpha 1e-4, c 1e-2   ---> unet n_channel: 1
-    # alpha 1e-3.9, c 1e-2 ---> unet n_channel: 1
+    # alpha 1e-4.5, c 1e-3   ---> unet n_channel: 1, 8 fold
+    # alpha 1e-4.8, c 1e-3   ---> unet n_channel: 1, 4 fold
     
     return parser.parse_args()
 
@@ -279,16 +284,16 @@ if __name__=='__main__':
     mnet.eval()
     
     ### load a unet for maskbackward
-    UNET = UNet(n_channels=args.n_channels,n_classes=1,bilinear=(not args.skip),skip=args.skip).to(device)
+    unet = UNet(n_channels=args.n_channels,n_classes=1,bilinear=(not args.skip),skip=args.skip).to(device)
     unetpath = args.unetpath
     if unetpath is not None:
         checkpoint = torch.load(unetpath)
-        UNET.load_state_dict(checkpoint['model_state_dict'])
+        unet.load_state_dict(checkpoint['model_state_dict'])
         print('Unet loaded successfully from: ' + unetpath )
     else:
-        UNET.apply(mnet_weights_init)
+        unet.apply(mnet_weights_init)
         print('Unet is randomly initalized!')
-    UNET.train()
+    unet.train()
     print('nn\'s are ready')
         
     # load training data
@@ -320,7 +325,7 @@ if __name__=='__main__':
     acceleration_fold = str(int(train_xfull.shape[1]/(args.base_freq+args.budget)))
     print(f'corefreq = {args.base_freq}, budget = {args.budget}, this is a {acceleration_fold}-fold training!')
     
-    alternating_update_with_unetRecon(mnet,UNET,train_xfull,val_xfull,train_yfulls=train_yfull,val_yfulls=val_yfull,\
+    alternating_update_with_unetRecon(mnet,unet,train_xfull,val_xfull,train_yfulls=train_yfull,val_yfulls=val_yfull,\
                                   maxIter_mb=args.maxItermb,alpha=args.alpha,c=args.c,lr_mb=args.lrb,\
                                   maxRep=args.mnRep,lr_mn=args.lrn,\
                                   corefreq=args.base_freq,budget=args.budget,\

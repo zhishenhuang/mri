@@ -17,7 +17,8 @@ from unet_model_orig import UNet
 # import unet_model
 # from unet_model import UNet
 
-def train_net(net,epochs=5,batch_size=5,\
+def train_net(net, train_in, test_full, \
+              epochs=5,batch_size=5,\
               lr=0.001,lr_weight_decay=1e-8,lr_momentum=0.9,\
               lr_s_stepsize=10,lr_s_gamma=0.8,\
               save_cp=False,datatype=torch.float,mode='rand',t_bs=10.0):
