@@ -196,7 +196,7 @@ def mask_backward(highmask,xstar,\
         M_high[highmask==1] = .1 # inverse-sigmoid value
         M_high[highmask==0] = -.1
     else:
-        fullmask = binarize(mask_complete(torch.sigmoid(slope*highmask),imgHeg,dtyp=dtyp,device=device))
+        fullmask = binarize(mask_complete( raw_normalize(torch.sigmoid(slope*highmask),budget,device=device),imgHeg,dtyp=dtyp,device=device))
         M_high   = highmask.clone().detach().to(device)
     M_high.requires_grad = True
     fullmask_b = fullmask.clone()

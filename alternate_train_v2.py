@@ -86,14 +86,14 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                 imgshape = (xstar.shape[1],xstar.shape[2])
                 if mnet.in_channels == 1:
                     x_lf     = get_x_f_from_yfull(lowfreqmask,yfull,device=device)
-                    highmask = mnet_wrapper(mnet,x_lf,budget,imgshape,normalize=True,complete=False,detach=True,device=device)
-#                     highmask =  mnet(x_lf.view(batch.size,1,xstar.shape[1],xstar.shape[2])).detach()
+#                     highmask = mnet_wrapper(mnet,x_lf,budget,imgshape,normalize=True,complete=False,detach=True,device=device)
+                    highmask =  mnet(x_lf.view(batch.size,1,xstar.shape[1],xstar.shape[2])).detach()
                 elif mnet.in_channels == 2:
                     y = torch.zeros((yfull.shape[0],2,yfull.shape[1],yfull.shape[2]),dtype=torch.float,device=device)
                     y[:,0,lowfreqmask==1,:] = torch.real(yfull)[:,lowfreqmask==1,:]
                     y[:,1,lowfreqmask==1,:] = torch.imag(yfull)[:,lowfreqmask==1,:]
-                    highmask = mnet_wrapper(mnet,y,budget,imgshape,normalize=True,complete=False,detach=True,device=device)
-#                     highmask =  mnet(y).detach()
+#                     highmask = mnet_wrapper(mnet,y,budget,imgshape,normalize=True,complete=False,detach=True,device=device)
+                    highmask = mnet(y).detach()
                 highmask_refined,unet,loss_aft,loss_bef = mask_backward(highmask,xstar,unet=unet,mnet=mnet,\
                                   beta=1.,alpha=alpha,c=c,\
                                   maxIter=maxIter_mb,seed=0,break_limit=np.inf,\
@@ -242,7 +242,7 @@ def get_args():
     parser.add_argument('-bg','--budget',metavar='BG',type=int,nargs='?',default=32,
                         help='number of high frequencies to sample', dest='budget')
     
-    parser.add_argument('-alpha', '--alpha-param', type=float, default=10**(-4.5),
+    parser.add_argument('-alpha', '--alpha-param', type=float, default=2e-5,
                         help='magnitude for l1 penalty in loss function', dest='alpha')    
     parser.add_argument('-c', '--c-param', type=float, default=1e-3,
                         help='magnitude for consistency penalty in loss function', dest='c')
@@ -251,19 +251,18 @@ def get_args():
                         help='number of GPUs', dest='ngpu')
     parser.add_argument('-uc', '--unet-channels', type=int, default=1,
                         help='number of Unet input channcels', dest='n_channels')
-    parser.add_argument('-skip', '--unet-skip', type=str, default='False',
+    parser.add_argument('-skip', '--unet-skip', type=str, default='True',
                         help='switch for ResNet structure in Unet', dest='skip')
     
-    # alpha 1e-4.5, c 1e-3   ---> unet n_channel: 1, 8 fold
-    # alpha 1e-4.8, c 1e-3   ---> unet n_channel: 1, 4 fold
+    # alpha 2e-5, c 1e-3   ---> unet n_channel: 1, 8 fold
+    # alpha 4e-6, c 1e-3   ---> unet n_channel: 1, 4 fold
     
     return parser.parse_args()
 
 
 if __name__=='__main__':
     args = get_args()
-    print(args)
-    
+      
     if args.skip == 'False':
         args.skip = False
     elif args.skip == 'True':
@@ -324,6 +323,8 @@ if __name__=='__main__':
     
     acceleration_fold = str(int(train_xfull.shape[1]/(args.base_freq+args.budget)))
     print(f'corefreq = {args.base_freq}, budget = {args.budget}, this is a {acceleration_fold}-fold training!')
+    
+    print(args)
     
     alternating_update_with_unetRecon(mnet,unet,train_xfull,val_xfull,train_yfulls=train_yfull,val_yfulls=val_yfull,\
                                   maxIter_mb=args.maxItermb,alpha=args.alpha,c=args.c,lr_mb=args.lrb,\
