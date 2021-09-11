@@ -16,8 +16,8 @@ import copy
 
 from utils import *
 from mnet import MNet
-# from mask_backward_v1 import mask_backward, mask_eval
-from mask_backward_v4 import mask_backward, mask_eval
+from mask_backward_v4 import mask_backward, mask_eval, ThresholdBinarizeMask
+
 sys.path.insert(0,'/home/huangz78/mri/unet/')
 from unet_model import UNet
 
@@ -30,7 +30,8 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                                       maxRep=5,lr_mn=1e-4,\
                                       epoch=1,batchsize=5,valbatchsize=10,\
                                       corefreq=24,budget=56,\
-                                      verbose=False,hfen=False,dtyp=torch.float,validate_every=30,\
+                                      verbose=False,hfen=False,dtyp=torch.float,\
+#                                       validate_every=30,\
                                       save_cp=False,count_start=(0,0),histpath=None,device='cpu'):
     '''
     alpha: magnitude of l1 penalty for high-frequency mask
@@ -102,6 +103,17 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                                   verbose=verbose,dtyp=torch.float,\
                                   hfen=hfen,return_loss_only=False,\
                                   device=device)   
+                ############################################ 
+                # adjust hyperparameters based on feedback:
+                if (loss_aft==np.inf) and (alpha>1e-6):
+                    alpha *= 0.5
+                if (loss_aft==np.inf) and (lr_mb>5e-5):
+                    lr_mb *= 0.5
+                if (loss_aft==loss_bef) and (alpha<2e-5):
+                    alpha *= 1./0.5
+                if (loss_aft==loss_bef) and (lr_mb<5e-3):
+                    lr_mb *= 1./0.5
+                ############################################
                 iterprog  = f'[{global_step+1}][{epoch_count+1}/{epoch}][{min(batchsize*(batchind+1),trainfulls.shape[0])}/{trainfulls.shape[0]}]'
                 mask_rand = mask_naiveRand(xstar.shape[1],fix=corefreq,other=budget,roll=True)[0].to(device)
                 mask_rand = mask_rand.repeat(xstar.shape[0],1)
@@ -133,9 +145,9 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                         optimizer_m.step()
                         rep += 1
                     mnet.eval()
-                    print(iterprog+' is a VALID step!')
+                    print(iterprog+' is a VALID step!\n')
                 else:
-                    print(iterprog+' is an invalid step!')
+                    print(iterprog+' is an invalid step!\n')
                 
                 ########################################  
                 ## (3) update Unet_recon
@@ -150,7 +162,8 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
             ########################################
             ## Validation after each epoch
             # use mnet to generate mask for validation set
-                if (global_step%validate_every == 0) or (batchind==(batch_nums-1)):
+                if (batchind == batch_nums//2) or (batchind==(batch_nums-1)):
+#                 if (global_step%validate_every == 0) or (batchind==(batch_nums-1)):
                     with torch.no_grad():
                         valerr = 0
                         valbatchind   = 0
@@ -213,9 +226,9 @@ def get_args():
                         help='Number of epochs', dest='epochs')
     parser.add_argument('-b', '--batch-size', metavar='B', type=int, nargs='?', default=10,
                         help='Batch size', dest='batchsize')
-    parser.add_argument('-lrb', '--learning-rate-backward', metavar='LRB', type=float, nargs='?', default=1e-2,
+    parser.add_argument('-lrb', '--learning-rate-backward', metavar='LRB', type=float, nargs='?', default=5e-3,
                         help='Learning rate for maskbackward', dest='lrb')
-    parser.add_argument('-lrn', '--learning-rate-mnet', metavar='LRN', type=float, nargs='?', default=1e-3,
+    parser.add_argument('-lrn', '--learning-rate-mnet', metavar='LRN', type=float, nargs='?', default=1e-4,
                         help='Learning rate for mnet', dest='lrn')
 
     parser.add_argument('-es','--epoch-start',metavar='ES',type=int,nargs='?',default=0,
@@ -232,10 +245,10 @@ def get_args():
     
     parser.add_argument('-mbit', '--mb-iter-max', type=int, default=30,
                         help='maximum interation for maskbackward function', dest='maxItermb')
-    parser.add_argument('-mnrep', '--mn-iter-rep', type=int, default=30,
+    parser.add_argument('-mnrep', '--mn-iter-rep', type=int, default=100,
                         help='inside one batch, updating mnet this many times', dest='mnRep')   
-    parser.add_argument('-valfreq', '--validate-every', type=int, default=100,
-                        help='do validation every # steps', dest='validate_every')
+#     parser.add_argument('-valfreq', '--validate-every', type=int, default=100,
+#                         help='do validation every # steps', dest='validate_every')
     
     parser.add_argument('-bs','--base-size',metavar='BS',type=int,nargs='?',default=8,
                         help='number of observed low frequencies', dest='base_freq')
@@ -331,7 +344,7 @@ if __name__=='__main__':
                                   maxRep=args.mnRep,lr_mn=args.lrn,\
                                   corefreq=args.base_freq,budget=args.budget,\
                                   epoch=args.epochs,batchsize=args.batchsize,\
-                                  validate_every=args.validate_every,\
+#                                   validate_every=args.validate_every,\
                                   verbose=False,save_cp=True,count_start=(args.epoch_start,args.batchind_start),\
                                   histpath=args.histpath,hfen=False,device=device)
     print('\n ~Training concluded!')

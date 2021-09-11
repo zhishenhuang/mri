@@ -219,7 +219,7 @@ def mask_backward(highmask,xstar,\
                     {'params': M_high},
                     {'params': unet.parameters(),'lr':1e-4}
                 ], lr=lr, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
-
+    unet_init = copy.copy(unet)
     if testmode=='UNET':
         init_mask_loss = mask_eval(fullmask_b.clone().detach(),xstar,mode='UNET',UNET=unet,dtyp=dtyp,hfen=hfen,device=device)
     elif testmode == 'sigpy':
@@ -292,11 +292,29 @@ def mask_backward(highmask,xstar,\
         mask_raw = torch.sigmoid(slope*M_high)
     highmask_refined = mask_makebinary(mask_raw,threshold=0.5,sigma=False,device=device)
     mask_sparsity = torch.sum(highmask_refined).item()/(batchsize*imgHeg) + corefreq/imgHeg
-
-    if testmode=='UNET':
-        mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp,device=device),xstar,mode='UNET',UNET=unet,dtyp=dtyp,hfen=hfen,device=device)
-    elif testmode == 'sigpy':
-        mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp,device=device),xstar,mode='sigpy',hfen=hfen,device='cpu')
+    
+    ####################################
+    # check if refined masks are trivial
+    mask_rep_count = 0
+    for i in range(len(highmask_refined)):
+        for j in range(i+1,len(highmask_refined)):
+            if (highmask_refined[i,:] - highmask_refined[j,:]).abs().sum()==0:
+                mask_rep_count += 1
+    if mask_rep_count > len(highmask_refined)//2: # we get the same mask for than half of cases
+        mask_loss = np.inf
+        unet = unet_init
+    elif cr_per_batch == 0:
+        mask_loss = init_mask_loss
+        unet = unet_init
+    else:
+        if testmode=='UNET':
+            mask_loss = mask_eval(mask_complete(highmask_refined,imgHeg,dtyp=dtyp,device=device),xstar,mode='UNET',UNET=unet,dtyp=dtyp,hfen=hfen,device=device)
+            if mask_loss >= init_mask_loss:
+                mask_loss_sigpy = mask_eval(mask_complete(highmask_refined.to('cpu'),imgHeg,dtyp=dtyp,device='cpu'),xstar.to('cpu'),mode='sigpy',hfen=hfen,device='cpu')
+                mask_loss = min(mask_loss,mask_loss_sigpy)
+        elif testmode == 'sigpy':
+            mask_loss = mask_eval(mask_complete(highmask_refined.to('cpu'),imgHeg,dtyp=dtyp,device='cpu'),xstar.to('cpu'),mode='sigpy',hfen=hfen,device='cpu')
+    
     if verbose and (testmode is not None):
         print('\nreturn at Iter ind: ', Iter)
         print(f'samp. ratio: {mask_sparsity}, loss of returned mask: {mask_loss} \n')
