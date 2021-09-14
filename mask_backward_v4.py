@@ -58,7 +58,9 @@ def nrmse(x,xstar):
     '''
     input should be torch tensors
     '''
-    return torch.sqrt(torch.sum((torch.flatten(x)-torch.flatten(xstar) )**2))/torch.sqrt(torch.sum(torch.flatten(xstar)**2))   
+#     return torch.sqrt(torch.sum((torch.flatten(x)-torch.flatten(xstar) )**2))/torch.sqrt(torch.sum(torch.flatten(xstar)**2)) 
+    return torch.norm( torch.squeeze(x) - xstar )/torch.norm(xstar)
+  
     
 def mask_eval(fullmask,xstar,\
               mode='UNET',UNET=None,dtyp=torch.float,\
@@ -75,8 +77,8 @@ def mask_eval(fullmask,xstar,\
         if UNET is not None:
             UNET.eval()
         batchsize = xstar.shape[0]; imgHeg = xstar.shape[1]; imgWid = xstar.shape[2]
-        for layer in range(batchsize):
-            xstar[layer,:,:] = xstar[layer,:,:]/torch.max(torch.abs(xstar[layer,:,:].flatten()))
+#         for layer in range(batchsize):
+#             xstar[layer,:,:] = xstar[layer,:,:]/torch.max(torch.abs(xstar[layer,:,:].flatten()))
         y = torch.fft.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho'),dim=(1,2))    
         z = torch.zeros(y.shape,device=device).to(y.dtype)
         for ind in range(batchsize):
@@ -122,15 +124,15 @@ def mask_eval(fullmask,xstar,\
 
 
 def mask_backward(highmask,xstar,\
-                  maxIter=300,seed=0,eps=1.,normalize=True,\
+                  maxIter=300,eps=1.,normalize=True,\
                   budget=20,\
-                  lr=1e-3,weight_decay=0,momentum=0,\
+                  lr=1e-3,lru=5e-5,weight_decay=0,momentum=0,\
                   beta=1, alpha=5e-1,c =.1,slope=1,\
                   mode='UNET',unet_mode=1,unet=None,mnet=None,\
                   break_limit=np.inf,print_every=10,\
                   verbose=False,save_cp=False,dtyp=torch.float,\
                   testmode=None,hfen=False,return_loss_only=False,\
-                  device='cpu'):
+                  device='cpu',seed=0):
     '''
     The purpose of this function is to update mask choice (particularly for high frequency) via backward propagation. 
     The input is one image, the known base ratio and the currently employed high frequency mask for the input image.
@@ -144,7 +146,8 @@ def mask_backward(highmask,xstar,\
     maxIter              : max iterations for backward-prop update step
     unroll_block         : how many blocks of solver to unroll, default 3
     lr                   : learning rate to update mask indicator, default 1e-3
-    lr_Lambda            : learning rate to update the ADMM parameter Lambda
+    lru                  : learning rate to update parameters of unet
+    
     slope                : slope inside the sigmoid function to output a real-valued mask
     beta                 : the weight for the data fidelity term in the loss function
     alpha                : l1 penalty magnitude when selecting high frequency masks
@@ -158,9 +161,10 @@ def mask_backward(highmask,xstar,\
     -- disabled args
     perturb              : flag to inject noise into gradients when update the mask, currently disabled!
     perturb_freq         : how frequently to inject noise, currently disabled!
-      
+    
     May 18: need to make xstar as a batch because BatchNorm2d will render batchsize=1 constantly zero.
     arxived inputs       : unroll_block=8,Lambda=10**(-6.5),rho=1e2,lr_Lambda=1e-8
+    lr_Lambda            : learning rate to update the ADMM parameter Lambda
     '''
     torch.manual_seed(seed)
     binarize = ThresholdBinarizeMask().apply
@@ -211,24 +215,24 @@ def mask_backward(highmask,xstar,\
 
             optimizer = optim.RMSprop([
                     {'params': M_high},
-                    {'params': unet.parameters(),'lr':1e-4}
+                    {'params': unet.parameters(),'lr':lru}
                 ], lr=lr, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
         else:
             unet.train()
             optimizer = optim.RMSprop([
                     {'params': M_high},
-                    {'params': unet.parameters(),'lr':1e-4}
+                    {'params': unet.parameters(),'lr':lru}
                 ], lr=lr, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
-    unet_init = copy.copy(unet)
+    unet_init = copy.deepcopy(unet)
     if testmode=='UNET':
         init_mask_loss = mask_eval(fullmask_b.clone().detach(),xstar,mode='UNET',UNET=unet,dtyp=dtyp,hfen=hfen,device=device)
     elif testmode == 'sigpy':
-        init_mask_loss = mask_eval(fullmask_b.clone().detach(),xstar,mode='sigpy',hfen=hfen,device='cpu')
+        init_mask_loss = mask_eval(fullmask_b.clone().detach(),xstar.to('cpu'),mode='sigpy',hfen=hfen,device='cpu')
     if (testmode is not None) and verbose:
         print('loss of the input mask: ', init_mask_loss)
 
     repCount = 0; rCount = 0
-    Iter = 0; loss_old = np.inf; x = None
+    Iter = 0; loss_old = np.inf
     cr_per_batch = 0
     while Iter < maxIter:
         z = torch.zeros(y.shape,device=device).to(y.dtype)
@@ -255,7 +259,7 @@ def mask_backward(highmask,xstar,\
             repCount = 0
         elif loss.item() >= loss_old:
             repCount += 1
-            if repCount >= break_limit:
+            if (repCount >= break_limit) and verbose:
                 print('No further decrease in loss after {} consecutive iters, ending iterations~ '.format(repCount))
                 break
         optimizer.zero_grad()
@@ -286,6 +290,7 @@ def mask_backward(highmask,xstar,\
                
         Iter += 1   
     
+#     mask_sparsity_prenorm = copy.deepcopy(mask_sparsity)
     if normalize:
         mask_raw = raw_normalize(torch.sigmoid(slope*M_high),budget,threshold=0.5,device=device)
     else:
@@ -296,11 +301,12 @@ def mask_backward(highmask,xstar,\
     ####################################
     # check if refined masks are trivial
     mask_rep_count = 0
-    for i in range(len(highmask_refined)):
+    for i in range(len(highmask_refined)-1):
         for j in range(i+1,len(highmask_refined)):
             if (highmask_refined[i,:] - highmask_refined[j,:]).abs().sum()==0:
-                mask_rep_count += 1
-    if mask_rep_count > len(highmask_refined)//2: # we get the same mask for than half of cases
+                mask_rep_count += 1.
+#     if mask_rep_count == len(highmask_refined)*(len(highmask_refined)-1)/2.: # we get the same mask for all cases
+    if mask_rep_count > len(highmask_refined)//2 * (len(highmask_refined)//2-1) /2.: # we get the same mask for than half of cases
         mask_loss = np.inf
         unet = unet_init
     elif cr_per_batch == 0:
@@ -325,5 +331,5 @@ def mask_backward(highmask,xstar,\
         if unet is None:
             return highmask_refined, mask_loss, init_mask_loss
         else:
-            return highmask_refined, unet, mask_loss, init_mask_loss
+            return highmask_refined, unet, mask_loss, init_mask_loss # , mask_sparsity_prenorm
 
