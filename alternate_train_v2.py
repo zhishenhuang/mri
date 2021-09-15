@@ -70,7 +70,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
         loss_val    = list(histRec['loss_val'])
         print('training history file successfully loaded from the path: ', histpath)
     
-    alpha_grid = 10**torch.arange(-5.5,-3.91,.1)
+    alpha_grid = 10**torch.arange(-5.7,-3.71,.2)
     alpha_ind_begin = torch.argmin((alpha-alpha_grid).abs())
     alpha_ind = copy.deepcopy(alpha_ind_begin)
     print('input alpha = ',alpha)
@@ -139,7 +139,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                             break
                         alpha_ind -= 1
                         lr_mb_tmp *= 2
-                        maxIter_mb_tmp += 20
+                        maxIter_mb_tmp += 1
                         flag = 'degenerate'
                     elif loss_aft == loss_bef: # no change of mask happened, alpha too large, decrease alpha
                         print(iterprog + ' mask no change,  alpha_Decrease')
@@ -180,7 +180,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                 mnet.train()
                 if (loss_aft < loss_bef) and (loss_aft < randqual):
                     rep = 0
-                    while rep < maxRep:
+                    while rep < max(maxRep,2*maxIter_mb_tmp):
                         if mnet.in_channels == 1:
                             x_lf      = get_x_f_from_yfull(lowfreqmask,yfull,device=device)
                             mask_pred = mnet(x_lf.view(batch.size,1,xstar.shape[1],xstar.shape[2]))
