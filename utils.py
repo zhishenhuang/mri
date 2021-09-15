@@ -300,11 +300,9 @@ def mask_complete(highmask,imgHeg,rolled=True,dtyp=torch.float,device='cpu'): # 
     base  = imgHeg - highmask.size()[1]
     fullmask = torch.zeros((layer,imgHeg),dtype=dtyp,device=device)
     if rolled:
-        coreInds = torch.arange(int(imgHeg/2)-int(base/2), int(imgHeg/2)+int(base/2),1,device=device)
-#         coreInds = np.arange(int(imgHeg/2)-int(base/2), int(imgHeg/2)+int(base/2))
+        coreInds = torch.arange(imgHeg//2-base//2, imgHeg//2+base//2+base%2,1,device=device)
     else:
         coreInds = torch.cat((torch.arange(0,base//2,1,device=device),torch.arange(Heg-1,Heg-1-base//2-base%2,-1,device=device)))
-#         coreInds = np.concatenate((np.arange(0,base//2),np.arange(Heg-1,Heg-1-base//2-base%2,-1)))
     fullmask[:,coreInds] = 1
     fullmask[:,setdiff1d(torch.arange(0,imgHeg,device=device),coreInds)] = highmask
     return fullmask
