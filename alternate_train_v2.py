@@ -220,7 +220,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                     for ind in range(len(highmask)):
                         highmask[ind,:] = mask_naiveRand(xstar.shape[1]-corefreq,fix=0,other=budget,roll=True)[0].to(device)
                     print(iterprog + ' random mask input for remedy attempt')
-                    highmask_refined,unet,loss_aft,loss_bef,mask_sparsity_prenorm = mask_backward(highmask,xstar,unet=unet,mnet=mnet,\
+                    highmask_refined,_,loss_aft,loss_bef,_ = mask_backward(highmask,xstar,unet=copy.deepcopy(unet_init),mnet=mnet,\
                                                                           beta=1.,alpha=alpha_grid[alpha_ind_begin],c=c,\
                                                                           maxIter=maxIter_mb, break_limit=np.inf,\
                                                                           lr=lr_mb,lru=lr_u,\
