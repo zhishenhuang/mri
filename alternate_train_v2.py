@@ -108,8 +108,9 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                 diffcount = 0
                 for i in range(len(highmask)-1):
                     for j in range(i+1,len(highmask)):
-                        diffcount += (highmask_b[i,:] - highmask_b[j,:]).abs().sum()
-                if diffcount < 2 * (len(highmask)-1): ######### initialize highmask as random mask
+                        if (highmask_b[i,:] - highmask_b[j,:]).abs().sum() != 0:
+                            diffcount += 1
+                if diffcount < len(highmask)//2 * (len(highmask)//2-1) /2: ######### initialize highmask as random mask
                     highmask = torch.zeros_like(highmask)
                     for ind in range(len(highmask)):
                         highmask[ind,:] = mask_naiveRand(xstar.shape[1]-corefreq,fix=0,other=budget,roll=True)[0].to(device)
