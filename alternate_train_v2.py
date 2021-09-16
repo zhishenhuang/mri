@@ -75,6 +75,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
     alpha_ind = copy.deepcopy(alpha_ind_begin)
     print('input alpha = ',alpha)
     print('alpha in grid begins with ', alpha_grid[alpha_ind])
+    target_sparsity = (corefreq + budget)/trainfulls.shape[1]
     
     # training loop
     try:
@@ -110,19 +111,22 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                     for j in range(i+1,len(highmask)):
                         if (highmask_b[i,:] - highmask_b[j,:]).abs().sum() != 0:
                             diffcount += 1
-                if diffcount < len(highmask)//2 * (len(highmask)//2-1) /2: ######### initialize highmask as random mask
+                if diffcount < (len(highmask)//2+len(highmask)%2) * ((len(highmask)//2+len(highmask)%2)-1) /2.: ## initialize highmask as random mask
                     highmask = torch.zeros_like(highmask)
                     for ind in range(len(highmask)):
                         highmask[ind,:] = mask_naiveRand(xstar.shape[1]-corefreq,fix=0,other=budget,roll=True)[0].to(device)
                     print(iterprog + ' random mask input')
-                    
-#                 print('current images: ', shuffle_inds[batch])
+                    randinput = True
+                else:
+                    randinput = False
+                        
                 flag = None
+                subflag = None
                 alpha_ind = copy.deepcopy(alpha_ind_begin)
                 lr_mb_tmp = copy.deepcopy(lr_mb)
                 maxIter_mb_tmp = copy.deepcopy(maxIter_mb)
                 while (alpha_ind<len(alpha_grid)) and (alpha_ind>=0):                   
-                    highmask_refined,unet,loss_aft,loss_bef = mask_backward(highmask,xstar,unet=unet,mnet=mnet,\
+                    highmask_refined,unet,loss_aft,loss_bef,mask_sparsity_prenorm = mask_backward(highmask,xstar,unet=unet,mnet=mnet,\
                                                                           beta=1.,alpha=alpha_grid[alpha_ind],c=c,\
                                                                           maxIter=maxIter_mb_tmp, break_limit=np.inf,\
                                                                           lr=lr_mb_tmp,lru=lr_u,\
@@ -134,46 +138,115 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                     ######### adjust hyperparameters based on feedback:
 #                     print(iterprog + 'mask_sparsity_prenorm = ', mask_sparsity_prenorm)
                     if loss_aft == np.inf:     # converged to degenerate mask, alpha too large, decrease alpha
-                        print(iterprog + ' mask degenerate, alpha_Decrease')
                         if (flag == 'no_change') or (flag == 'no_improve'):
                             print(f'paradox: first {flag} then degenerate')
+                            flag = 'fail'
                             break
-                        alpha_ind -= 1
-                        lr_mb_tmp *= 2
-                        maxIter_mb_tmp += 1
+                        if mask_sparsity_prenorm > target_sparsity:
+                            if subflag == 'down':
+                                print(f'paradox: first {flag}/{subflag} then degenerate/up')
+                                flag = 'fail'
+                                break
+                            print(iterprog + ' mask degenerate, alpha_Increase')
+                            alpha_ind += 1
+                            maxIter_mb_tmp = copy.deepcopy(maxIter_mb)
+                            subflag = 'up'
+                        else:
+                            if subflag == 'up':
+                                print(f'paradox: first {flag}/{subflag} then degenerate/down')
+                                flag = 'fail'
+                                break
+                            print(iterprog + ' mask degenerate, alpha_Decrease')
+                            alpha_ind -= 1
+                            lr_mb_tmp *= 2
+                            maxIter_mb_tmp += 1
+                            subflag = 'down'
                         flag = 'degenerate'
                     elif loss_aft == loss_bef: # no change of mask happened, alpha too large, decrease alpha
-                        print(iterprog + ' mask no change,  alpha_Decrease')
                         if (flag == 'degenerate') or (flag == 'no_improve'):
                             print(f'paradox: first {flag} then no change')
+                            flag = 'fail'
                             break
-                        alpha_ind -= 1
-                        lr_mb_tmp *= 2
+                        if mask_sparsity_prenorm > target_sparsity:
+                            if subflag == 'down':
+                                print(f'paradox: first {flag}/{subflag} then no_change/up')
+                                flag = 'fail'
+                                break
+                            print(iterprog + ' mask no change,  alpha_Increase')
+                            alpha_ind += 1
+                            maxIter_mb_tmp = copy.deepcopy(maxIter_mb)
+                            subflag = 'up'
+                        else:
+                            if subflag == 'up':
+                                print(f'paradox: first {flag}/{subflag} then no_change/down')
+                                flag = 'fail'
+                                break
+                            print(iterprog + ' mask no change,  alpha_Decrease')
+                            alpha_ind -= 1
+                            lr_mb_tmp *= 2
+                            maxIter_mb_tmp += 1
+                            subflag = 'down'
                         flag = 'no_change'
                     elif loss_aft > loss_bef:# mb did not get better masks, although refined masks are not trivial
-                        print(iterprog + ' mb did not improve, alpha_Increase')
-                        alpha_ind = max(alpha_ind_begin,alpha_ind) + 1
-                        lr_mb_tmp = lr_mb * 2
-                        maxIter_mb_tmp = copy.deepcopy(maxIter_mb)
+                        if mask_sparsity_prenorm > target_sparsity:
+                            if subflag == 'down':
+                                print(f'paradox: first {flag}/{subflag} then no_improve/up')
+                                flag = 'fail'
+                                break
+                            print(iterprog + ' mb did not improve, alpha_Increase')
+                            alpha_ind = max(alpha_ind_begin,alpha_ind) + 1
+                            maxIter_mb_tmp = copy.deepcopy(maxIter_mb)
+                            subflag = 'up'
+                        else:
+                            if subflag == 'up':
+                                print(f'paradox: first {flag}/{subflag} then no_improve/down')
+                                flag = 'fail'
+                                break
+                            alpha_ind -= 1                      
+                            lr_mb_tmp *= 2
+                            maxIter_mb_tmp += 1
+                            subflag = 'down'
                         flag = 'no_improve'
                     else:                      # some change happens to the mask and the mask is not degenerate, proceed
                         print(iterprog + ' mb finished')
-                        flag = 'success'
+                        if loss_aft < loss_bef:
+                            flag = 'success'
+                        else:
+                            flag = 'fail'
                         break      
                     ###################################################################################################
+                if (flag != 'success') and (not randinput):
+                    highmask = torch.zeros(xstar.shape[0],xstar.shape[1]-corefreq,device=device)
+                    for ind in range(len(highmask)):
+                        highmask[ind,:] = mask_naiveRand(xstar.shape[1]-corefreq,fix=0,other=budget,roll=True)[0].to(device)
+                    print(iterprog + ' random mask input for remedy attempt')
+                    highmask_refined,unet,loss_aft,loss_bef,mask_sparsity_prenorm = mask_backward(highmask,xstar,unet=unet,mnet=mnet,\
+                                                                          beta=1.,alpha=alpha_grid[alpha_ind_begin],c=c,\
+                                                                          maxIter=maxIter_mb, break_limit=np.inf,\
+                                                                          lr=lr_mb,lru=lr_u,\
+                                                                          mode='UNET',testmode='UNET',\
+                                                                          budget=budget,normalize=True,\
+                                                                          verbose=verbose,dtyp=torch.float,\
+                                                                          hfen=hfen,return_loss_only=False,\
+                                                                          device=device,seed=seed)
+                    if loss_aft < loss_bef:
+                        flag = 'success'
+                    else:
+                        flag = 'fail'
+                        
                 loss_after.append(loss_aft)
                 loss_before.append(loss_bef)
-                print(iterprog + f', quality of old mnet mask : {loss_bef}')
-                print(iterprog + f', quality of refined  mask : {loss_aft}')
+                print(iterprog + f' quality of old mnet mask : {loss_bef}')
+                print(iterprog + f' quality of refined  mask : {loss_aft}')
                 
                 if flag == 'success':
                     mask_rand = mask_naiveRand(xstar.shape[1],fix=corefreq,other=budget,roll=True)[0].to(device)
                     mask_rand = mask_rand.repeat(xstar.shape[0],1)
                     randqual  = mask_eval(mask_rand,xstar,mode='UNET',UNET=unet_init,dtyp=dtyp,hfen=hfen,device=device) # use fixed warmed-up unet as the reconstructor, Aug 30                
-                    print(iterprog + f', quality of random   mask : {randqual}')
+                    print(iterprog + f' quality of random   mask : {randqual}')
                     loss_rand.append(randqual)  ## check mnet performance: does it beat random sampling?
                 else:
-                    print(iterprog + f', quality of random   mask : irrelevant')
+                    print(iterprog + f' quality of random   mask : irrelevant')
                     loss_rand.append(np.nan)
                 ########################################  
                 ## (2) update mnet
@@ -270,7 +343,7 @@ def get_args():
                         help='Batch size', dest='batchsize')
     parser.add_argument('-lrb', '--learning-rate-backward', metavar='LRB', type=float, nargs='?', default=5e-3,
                         help='Learning rate for maskbackward', dest='lrb')
-    parser.add_argument('-lrn', '--learning-rate-mnet', metavar='LRN', type=float, nargs='?', default=5e-5,
+    parser.add_argument('-lrn', '--learning-rate-mnet', metavar='LRN', type=float, nargs='?', default=5e-4,
                         help='Learning rate for mnet', dest='lrn')
     parser.add_argument('-lru', '--learning-rate-unet', metavar='LRU', type=float, nargs='?', default=5e-4,
                         help='Learning rate for unet', dest='lru')
@@ -289,7 +362,7 @@ def get_args():
     
     parser.add_argument('-mbit', '--mb-iter-max', type=int, default=20,
                         help='maximum interation for maskbackward function', dest='maxItermb')
-    parser.add_argument('-mnrep', '--mn-iter-rep', type=int, default=50,
+    parser.add_argument('-mnrep', '--mn-iter-rep', type=int, default=60,
                         help='inside one batch, updating mnet this many times', dest='mnRep')   
 #     parser.add_argument('-valfreq', '--validate-every', type=int, default=100,
 #                         help='do validation every # steps', dest='validate_every')
@@ -299,7 +372,7 @@ def get_args():
     parser.add_argument('-bg','--budget',metavar='BG',type=int,nargs='?',default=32,
                         help='number of high frequencies to sample', dest='budget')
     
-    parser.add_argument('-alpha', '--alpha-param', type=float, default=10**(-4.2),
+    parser.add_argument('-alpha', '--alpha-param', type=float, default=2e-5,
                         help='magnitude for l1 penalty in loss function', dest='alpha')    
     parser.add_argument('-c', '--c-param', type=float, default=5e-4,
                         help='magnitude for consistency penalty in loss function', dest='c')

@@ -290,7 +290,7 @@ def mask_backward(highmask,xstar,\
                
         Iter += 1   
     
-#     mask_sparsity_prenorm = copy.deepcopy(mask_sparsity)
+    mask_sparsity_prenorm = copy.deepcopy(mask_sparsity)
     if normalize:
         mask_raw = raw_normalize(torch.sigmoid(slope*M_high),budget,threshold=0.5,device=device)
     else:
@@ -306,7 +306,7 @@ def mask_backward(highmask,xstar,\
             if (highmask_refined[i,:] - highmask_refined[j,:]).abs().sum()==0:
                 mask_rep_count += 1.
 #     if mask_rep_count == len(highmask_refined)*(len(highmask_refined)-1)/2.: # we get the same mask for all cases
-    if mask_rep_count > len(highmask_refined)//2 * (len(highmask_refined)//2-1) /2.: # we get the same mask for than half of cases
+    if mask_rep_count > (len(highmask_refined)//2) * (len(highmask_refined)//2-1) /2.: # we get the same mask for than half of cases
         mask_loss = np.inf
         unet = unet_init
     elif cr_per_batch == 0:
@@ -331,5 +331,5 @@ def mask_backward(highmask,xstar,\
         if unet is None:
             return highmask_refined, mask_loss, init_mask_loss
         else:
-            return highmask_refined, unet, mask_loss, init_mask_loss # , mask_sparsity_prenorm
+            return highmask_refined, unet, mask_loss, init_mask_loss, mask_sparsity_prenorm
 
