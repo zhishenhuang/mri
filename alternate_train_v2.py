@@ -26,6 +26,7 @@ np.random.seed(0)
 random.seed(0)
 
 def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls=None,val_yfulls=None,\
+                                      unet_init=None,\
                                       maxIter_mb=20,alpha=2.8*1e-5,c=0.05, maxRep=5,
                                       lr_mb=1e-2,lr_mn=1e-4,lr_u=5e-5,\
                                       epoch=1,batchsize=5,valbatchsize=10,\
@@ -43,7 +44,9 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
         val_yfulls = torch.fft.fftshift(F.fftn(valfulls,dim=(1,2),norm='ortho'),dim=(1,2)) # y is ROLLED!
     else:
         val_yfulls = torch.fft.fftshift(val_yfulls,dim=(1,2))
-    unet_init = copy.deepcopy(unet)
+    if unet_init is None:
+        unet_init = copy.deepcopy(unet)
+    
     DTyp = torch.cfloat if dtyp==torch.float else torch.cdouble
     dir_checkpoint = '/home/huangz78/checkpoints/'
     criterion_mnet = nn.BCEWithLogitsLoss()
@@ -309,14 +312,20 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
                             torch.cuda.empty_cache()
             ########################################                     
                 if save_cp and ( (global_step%10==0) or (batchind==(batch_nums-1)) ):
-                    torch.save({'model_state_dict': mnet.state_dict()}, dir_checkpoint + 'mnet_split_trained_cf_'+ str(corefreq)+'_bg_'+str(budget)+ '_unet_in_chan_' + str(unet.n_channels) +'.pt')
-                    torch.save({'model_state_dict': unet.state_dict()}, dir_checkpoint + 'unet_split_trained_cf_'+ str(corefreq)+'_bg_'+str(budget)+ '_unet_in_chan_' + str(unet.n_channels) +'.pt')
+                    torch.save({'model_state_dict': mnet.state_dict()}, dir_checkpoint + 'mnet_split_trained_cf_'+ str(corefreq) + '_bg_'+str(budget) + '_unet_in_chan_' + str(unet.n_channels) + '.pt')
+                    torch.save({'model_state_dict': unet.state_dict()}, dir_checkpoint + 'unet_split_trained_cf_'+ str(corefreq) + '_bg_'+str(budget) + '_unet_in_chan_' + str(unet.n_channels) + '.pt')
                     print(f'\t Checkpoint saved at epoch {epoch_count+1}, iter {global_step + 1}, batchind {batchind+1}!')
                     filepath = '/home/huangz78/checkpoints/alternating_update_error_track_'+acceleration_fold+'fold_'+ 'unet_in_chan_' + str(unet.n_channels) + '.npz'
                     np.savez(filepath,loss_rand=loss_rand,loss_after=loss_after,loss_before=loss_before,loss_val=loss_val)
                 global_step += 1
                 batchind += 1               
-            batchind = 0
+            batchind = 0           
+            if save_cp:
+                    torch.save({'model_state_dict': mnet.state_dict()}, dir_checkpoint + 'mnet_split_trained_cf_'+ str(corefreq)+'_bg_'+str(budget)+ '_unet_in_chan_' + str(unet.n_channels) + '_epoch_' + str(epoch_count) +'.pt')
+                    torch.save({'model_state_dict': unet.state_dict()}, dir_checkpoint + 'unet_split_trained_cf_'+ str(corefreq)+'_bg_'+str(budget)+ '_unet_in_chan_' + str(unet.n_channels) + '_epoch_' + str(epoch_count) +'.pt')
+                    print(f'\t Checkpoint saved at epoch {epoch_count+1}, iter {global_step + 1}, batchind {batchind+1}!')
+                    filepath = '/home/huangz78/checkpoints/alternating_update_error_track_'+acceleration_fold+'fold_'+ 'unet_in_chan_' + str(unet.n_channels) + '_epoch_' + str(epoch_count) + '.npz'
+                    np.savez(filepath,loss_rand=loss_rand,loss_after=loss_after,loss_before=loss_before,loss_val=loss_val)
             epoch_count += 1
     except KeyboardInterrupt: # need debug
         print('Keyboard Interrupted! Exit~')
@@ -359,6 +368,8 @@ def get_args():
                         help='path file for a unet', dest='unetpath')
     parser.add_argument('-hp', '--history-path', type=str, default=None,
                         help='path file for npz file recording training history', dest='histpath')
+    parser.add_argument('-uip', '--unet-init-path', type=str, default='/home/huangz78/checkpoints/unet_1_True_8frand.pt',
+                        help='path file for an initial unet', dest='unet_init_path')
     
     parser.add_argument('-mbit', '--mb-iter-max', type=int, default=20,
                         help='maximum interation for maskbackward function', dest='maxItermb')
@@ -425,10 +436,19 @@ if __name__=='__main__':
         unet.load_state_dict(checkpoint['model_state_dict'])
         print('Unet loaded successfully from: ' + unetpath )
     else:
-        unet.apply(mnet_weights_init)
+        unet.apply(nn_weights_init)
         print('Unet is randomly initalized!')
     unet.train()
     print('nn\'s are ready')
+    
+    unetinitpath = args.unet_init_path
+    if unetinitpath is not None:
+        unet_init = UNet(n_channels=args.n_channels,n_classes=1,bilinear=(not args.skip),skip=args.skip).to(device)
+        checkpoint = torch.load(unetinitpath)
+        unet_init.load_state_dict(checkpoint['model_state_dict'])
+        print('Unet_init loaded successfully from: ' + unetinitpath )
+    else:
+        unet_init = None
         
     # load training data
     train_dir = '/mnt/shared_a/data/fastMRI/knee_singlecoil_train.npz'
@@ -462,6 +482,7 @@ if __name__=='__main__':
     print(args)
     
     alternating_update_with_unetRecon(mnet,unet,train_xfull,val_xfull,train_yfulls=train_yfull,val_yfulls=val_yfull,\
+                                  unet_init=unet_init,\
                                   maxIter_mb=args.maxItermb,maxRep=args.mnRep,\
                                   alpha=args.alpha,c=args.c,\
                                   lr_mb=args.lrb,lr_mn=args.lrn,lr_u=args.lru,\

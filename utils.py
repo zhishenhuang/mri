@@ -21,9 +21,9 @@ from skimage.metrics import peak_signal_noise_ratio as psnr_
 #     return torch.real(F.ifftn(torch.tensordot(M.to(DType) , F.fftn(X,dim=(0),norm='ortho'), \
 #                 dims=([1],[0])),dim=(0),norm='ortho'))
 
-def mnet_weights_init(m):
+def nn_weights_init(m):
     classname = m.__class__.__name__
-    print(m)
+#     print(m)
     if classname.find('Conv2d') != -1:
         nn.init.normal_(m.weight.data, 0.0, 0.02)
     elif classname.find('BatchNorm2d') != -1:
