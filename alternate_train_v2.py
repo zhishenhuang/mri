@@ -424,7 +424,7 @@ if __name__=='__main__':
         mnet.load_state_dict(checkpoint['model_state_dict'])
         print('MNet loaded successfully from: ' + mnetpath)
     else:
-        mnet.apply(mnet_weights_init)
+        mnet.apply(nn_weights_init)
         print('Mnet is randomly initialized!')
     mnet.eval()
     

@@ -26,7 +26,7 @@ def mnet_getinput(mnet,data,base=8,budget=32,batchsize=10,unet_channels=1,return
     '''   
     mnet.eval()
     
-    lowfreqmask = mask_naiveRand(data.shape[1],fix=base,other=0,roll=True)[0]
+    lowfreqmask = mask_naiveRand(data.shape[1],fix=base,other=0,roll=False)[0]
     heg,wid  = data.shape[1],data.shape[2]
     imgshape = (heg,wid)
     yfull = F.fftn(data,dim=(1,2),norm='ortho')
@@ -45,7 +45,9 @@ def mnet_getinput(mnet,data,base=8,budget=32,batchsize=10,unet_channels=1,return
         y_in    = torch.zeros(len(batch),2,heg,wid,device=device)
         y_in[:,0,:,:] = torch.real(y_lf)
         y_in[:,1,:,:] = torch.imag(y_lf)
-        mask_b = mnet_wrapper(mnet,y_in,budget,imgshape,normalize=True,detach=True,device=device)
+        y_in   = F.fftshift(y_in,dim=(2,3))
+        mask_b = F.ifftshift(mnet_wrapper(mnet,y_in,budget,imgshape,normalize=True,detach=True,device=device),dim=(1))
+        
         if return_mask:
             masks[batch,:] = mask_b        
         y_mnet_b = torch.zeros_like(yfull_b,device=device)
@@ -364,5 +366,5 @@ if __name__ == '__main__':
               lr=args.lr, lr_weight_decay=0, lr_momentum=0,\
               mnet=mnet,
               base=args.base_freq,budget=args.budget,\
-              save_cp=True,mode=args.mode,histpath=args.histpath,\
+              save_cp=False,mode=args.mode,histpath=args.histpath,\
               device=device)

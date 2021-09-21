@@ -459,6 +459,8 @@ def compute_hfen(recon: torch.Tensor,gt: torch.Tensor) -> np.ndarray:
         gt    = gt.to(torch.cfloat)
     if type(gt) is torch.Tensor:
         recon = recon.to(torch.cfloat)
+    recon = recon.cpu()
+    gt    = gt.cpu()
     LoG_GT    = ndimage.gaussian_laplace(np.real(gt), sigma=1)    + 1j*ndimage.gaussian_laplace(np.imag(gt), sigma=1)
     LoG_recon = ndimage.gaussian_laplace(np.real(recon), sigma=1) + 1j*ndimage.gaussian_laplace(np.imag(recon), sigma=1)
     return np.linalg.norm(LoG_recon - LoG_GT)/np.linalg.norm(LoG_GT)
