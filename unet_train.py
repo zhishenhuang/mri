@@ -18,6 +18,16 @@ from unet_model import UNet
 from mnet import MNet
 import copy
 
+def lpnorm(x,xstar,p='fro'):
+    '''
+    x and xstar are both assumed to be in the format NCHW
+    '''
+    assert(x.shape==xstar.shape)
+    numerator   = torch.norm(x-xstar,p=p,dim=(2,3))
+    denominator = torch.norm(xstar  ,p=p,dim=(2,3))
+    error = torch.sum( torch.div(numerator,denominator) )
+    return error
+
 
 def mnet_getinput(mnet,data,base=8,budget=32,batchsize=10,unet_channels=1,return_mask=False,device='cpu'):
     '''
@@ -25,14 +35,14 @@ def mnet_getinput(mnet,data,base=8,budget=32,batchsize=10,unet_channels=1,return
     returned data in the format [NCHW]
     '''   
     mnet.eval()
-    
+    mnet.to(device)
     lowfreqmask = mask_naiveRand(data.shape[1],fix=base,other=0,roll=False)[0]
     heg,wid  = data.shape[1],data.shape[2]
     imgshape = (heg,wid)
     yfull = F.fftn(data,dim=(1,2),norm='ortho')
     y = torch.zeros_like(yfull)
     y[:,lowfreqmask==1,:] = yfull[:,lowfreqmask==1,:]    
-    x_ifft = torch.zeros(len(yfull),unet_channels,heg,wid,device=device)
+    x_ifft = torch.zeros(len(yfull),unet_channels,heg,wid,device='cpu')
     if return_mask:
         masks = torch.zeros(len(yfull),heg,device=device)
     
@@ -54,11 +64,11 @@ def mnet_getinput(mnet,data,base=8,budget=32,batchsize=10,unet_channels=1,return
         for ind in range(len(mask_b)):
             y_mnet_b[:,mask_b[ind,:]==1,:] = yfull_b[:,mask_b[ind,:]==1,:]
         if   unet_channels == 1:
-            x_ifft[batch,0,:,:] = torch.abs(F.ifftn(y_mnet_b,dim=(1,2),norm='ortho'))
+            x_ifft[batch,0,:,:] = torch.abs(F.ifftn(y_mnet_b,dim=(1,2),norm='ortho')).cpu()
         elif unet_channels == 2:
             x_ifft_c = F.ifftn(y_mnet_b,dim=(1,2),norm='ortho')
-            x_ifft[batch,0,:,:] = torch.real(x_ifft_c)
-            x_ifft[batch,1,:,:] = torch.imag(x_ifft_c)
+            x_ifft[batch,0,:,:] = torch.real(x_ifft_c).cpu()
+            x_ifft[batch,1,:,:] = torch.imag(x_ifft_c).cpu()
         batchind += 1
         
     if return_mask:
@@ -122,7 +132,7 @@ def train_net(net,\
     try:
         if mode == 'mnet':
             train_full  = torch.tensor(np.load('/mnt/shared_a/data/fastMRI/knee_singlecoil_train.npz')['data'],dtype=datatype)
-            test_full   = torch.tensor(np.load('/mnt/shared_a/data/fastMRI/knee_singlecoil_val.npz')['data'],dtype=datatype)
+            test_full   = torch.tensor(np.load('/mnt/shared_a/data/fastMRI/knee_singlecoil_val.npz')['data'],  dtype=datatype)
             
             for ind in range(train_full.shape[0]):
                 train_full[ind,:,:] = train_full[ind,:,:]/train_full[ind,:,:].abs().max()
@@ -191,11 +201,11 @@ def train_net(net,\
             test_in    = xs[testinds ,:,:,:]
             print('n_train = {}, n_test = {}'.format(n_train,n_test))
 
-        optimizer = optim.RMSprop(net.parameters(), lr=lr, weight_decay=lr_weight_decay, momentum=lr_momentum)
-        # optimizer = optim.Adam/SGD
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_s_stepsize, gamma=lr_s_gamma)
-    #     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min' if net.n_classes > 1 else 'max', patience=2)
-        criterion = nn.MSELoss() 
+#         optimizer = optim.RMSprop(net.parameters(), lr=lr, weight_decay=lr_weight_decay, momentum=lr_momentum)
+        optimizer = optim.Adam(net.parameters(), lr=lr, weight_decay=lr_weight_decay)
+#         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_s_stepsize, gamma=lr_s_gamma)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=2, verbose=True, min_lr=5e-7)
+#         criterion = nn.MSELoss() 
 
         n_train = train_in.shape[0]
         n_test  = test_in.shape[0]
@@ -215,7 +225,8 @@ def train_net(net,\
                     testin    = test_in[t_b,:,:,:].to(device)
                     testlabel = test_label[t_b,:,:,:].to(device)
                     pred      = net(testin).detach()
-                    testloss += criterion(pred, testlabel)*len(t_b)
+#                     testloss += criterion(pred, testlabel)*len(t_b)
+                    testloss += lpnorm(pred, testlabel)
                 test_loss.append(testloss.item()/n_test)
                 if testloss.item()/n_test < testloss_old:
                     testloss_old = testloss.item()/n_test
@@ -232,13 +243,16 @@ def train_net(net,\
                 labelbatch = train_label[batch,:,:,:].to(device)
 
                 pred = net(imgbatch)
-                loss = criterion(pred, labelbatch)
-                train_loss.append(loss.item())
-                epoch_loss += loss.item()*len(batch)
-                print(f'[{global_step+1}][{epoch+1}/{epochs}][{batchind}/{train_batchnums}]  loss/train: {loss.item()}')
+#                 loss = criterion(pred, labelbatch)                
+#                 train_loss.append(loss.item())
+#                 epoch_loss += loss.item()*len(batch)
+                loss = lpnorm(pred,labelbatch)
+                train_loss.append(loss.item()/len(batch))
+                epoch_loss += loss.item()
+                print(f'[{global_step+1}][{epoch+1}/{epochs}][{batchind}/{train_batchnums}]  loss/train: {loss.item()/len(batch)}')
                 optimizer.zero_grad()
                 loss.backward()
-                nn.utils.clip_grad_value_(net.parameters(), 0.1)
+#                 nn.utils.clip_grad_value_(net.parameters(), 0.1)
                 optimizer.step()
                 
                 batchind    += 1
@@ -254,7 +268,8 @@ def train_net(net,\
                     testin    = test_in[t_b,:,:,:].to(device)
                     testlabel = test_label[t_b,:,:,:].to(device)
                     pred      = net(testin).detach()
-                    testloss += criterion(pred, testlabel)*len(t_b)
+#                     testloss += criterion(pred, testlabel)*len(t_b)
+                    testloss += lpnorm(pred, testlabel)
                 testloss_epoch = testloss.item()/n_test
                 test_loss.append(testloss_epoch)
                 if testloss_epoch < testloss_old:
@@ -265,7 +280,8 @@ def train_net(net,\
                     
             print(f'\n\t[{epoch+1}/{epochs}]  loss/VAL: {testloss_epoch}')
             net.train()
-            scheduler.step()
+#             scheduler.step()
+            scheduler.step(testloss_epoch)
             
             if save_cp :
                 dir_checkpoint = '/mnt/shared_a/checkpoints/'
@@ -307,9 +323,9 @@ def get_args():
     parser.add_argument('-m','--mode',metavar='M',type=str,nargs='?',default='rand',
                         help='training mode', dest='mode')
     
-    parser.add_argument('-cn', '--channel-num', metavar='CN', type=int, nargs='?', default=1,
+    parser.add_argument('-cn', '--channel-num', metavar='CN', type=int, nargs='?', default=2,
                         help='channel number of unet', dest='n_channels')
-    parser.add_argument('-s','--skip',type=str,default='True',
+    parser.add_argument('-s','--skip',type=str,default='False',
                         help='residual network application', dest='skip')
     
     parser.add_argument('-bs','--base-size',metavar='BS',type=int,nargs='?',default=8,
@@ -350,11 +366,11 @@ if __name__ == '__main__':
         unet.load_state_dict(checkpoint['model_state_dict'])
         print('Unet loaded successfully from: ' + args.unetpath )
     else:
-        unet.apply(nn_weights_init)
+#         unet.apply(nn_weights_init)
         print('Unet is randomly initalized!')
     unet.train()        
     if args.mnetpath is not None:
-        mnet = MNet(beta=1,in_channels=2,out_size=320-args.base_freq, imgsize=(320,320),poolk=3).to(device)
+        mnet = MNet(beta=1,in_channels=2,out_size=320-args.base_freq, imgsize=(320,320),poolk=3)
         checkpoint = torch.load(args.mnetpath)
         mnet.load_state_dict(checkpoint['model_state_dict'])
         print('MNet loaded successfully from: ' + args.mnetpath)
@@ -366,5 +382,5 @@ if __name__ == '__main__':
               lr=args.lr, lr_weight_decay=0, lr_momentum=0,\
               mnet=mnet,
               base=args.base_freq,budget=args.budget,\
-              save_cp=False,mode=args.mode,histpath=args.histpath,\
+              save_cp=True,mode=args.mode,histpath=args.histpath,\
               device=device)
