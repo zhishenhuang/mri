@@ -216,13 +216,13 @@ def mask_backward(highmask,xstar,\
             optimizer = optim.RMSprop([
                     {'params': M_high},
                     {'params': unet.parameters(),'lr':lru}
-                ], lr=lr, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
+                ], lr=lr, weight_decay=weight_decay, eps=1e-10)
         else:
             unet.train()
             optimizer = optim.RMSprop([
                     {'params': M_high},
                     {'params': unet.parameters(),'lr':lru}
-                ], lr=lr, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
+                ], lr=lr, weight_decay=weight_decay, eps=1e-10)
     unet_init = copy.deepcopy(unet)
     if testmode=='UNET':
         init_mask_loss = mask_eval(fullmask_b.clone().detach(),xstar,mode='UNET',UNET=unet,dtyp=dtyp,hfen=hfen,device=device)

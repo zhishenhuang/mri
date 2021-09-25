@@ -50,7 +50,7 @@ def alternating_update_with_unetRecon(mnet,unet,trainfulls,valfulls,train_yfulls
     DTyp = torch.cfloat if dtyp==torch.float else torch.cdouble
     dir_checkpoint = '/home/huangz78/checkpoints/'
     criterion_mnet = nn.BCEWithLogitsLoss()
-    optimizer_m = optim.RMSprop(mnet.parameters(), lr=lr_mn, weight_decay=0, momentum=0)
+    optimizer_m = optim.RMSprop(mnet.parameters(), lr=lr_mn, weight_decay=0)
     binarize = ThresholdBinarizeMask().apply
     acceleration_fold = str(int(trainfulls.shape[1]/(corefreq+budget)))
     
