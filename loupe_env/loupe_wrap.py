@@ -9,8 +9,8 @@ import loupe_env.line_sampler
 from loupe_env.line_sampler import *
 
 sys.path.insert(0,'/home/huangz78/mri/unet/')
-import unet_model
-from unet_model import UNet
+import unet.unet_model
+from unet.unet_model import UNet
 
 from utils import kplot
 

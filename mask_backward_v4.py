@@ -18,7 +18,7 @@ from solvers import ADMM_TV
 import copy
 
 sys.path.insert(0,'/home/huangz78/mri/unet/')
-from unet_model import UNet
+from unet.unet_model import UNet
 
 from torch.autograd import Function
 class ThresholdBinarizeMask(Function):

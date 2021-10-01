@@ -19,6 +19,7 @@ from unet.unet_model_fbr import Unet
 from unet.unet_model_banding_removal_fbr import UnetModel
 from mnet import MNet
 import copy
+dir_checkpoint = '/mnt/DataA/checkpoints/leo/'
 
 def lpnorm(x,xstar,p='fro'):
     '''
@@ -260,7 +261,7 @@ def train_net(net,\
                 print(f'[{global_step+1}][{epoch+1}/{epochs}][{batchind}/{train_batchnums}]  loss/train: {loss.item()/len(batch)}')
                 optimizer.zero_grad()
                 loss.backward()
-#                 nn.utils.clip_grad_value_(net.parameters(), 0.1)
+                nn.utils.clip_grad_value_(net.parameters(), 0.1)
                 optimizer.step()
                 torch.cuda.empty_cache()
                 del imgbatch, labelbatch, pred
@@ -294,8 +295,7 @@ def train_net(net,\
 #             scheduler.step()
             scheduler.step(testloss_epoch)
             
-            if save_cp :
-                dir_checkpoint = '/mnt/DataA/checkpoints/leo/'
+            if save_cp :                
 #                 recName   = dir_checkpoint + 'TrainRec_unet_'+ str(net.in_chans) + '_' +str(net.skip) +'_'+ acceleration_fold +'f' + mode + '_epoch_' + str(epoch) + '.npz' 
                 recName = dir_checkpoint + f'TrainRec_unet_fbr_{str(net.in_chans)}_chans_{str(net.chans)}_epoch_{str(epoch)}.npz'
                 np.savez(recName,trainloss=train_loss,testloss=test_loss,trainloss_epoch=train_loss_epoch,mnetpath=mnetpath)
@@ -309,7 +309,6 @@ def train_net(net,\
             torch.cuda.empty_cache()   
     except KeyboardInterrupt:
         print('Keyboard Interrupted! Exit~')
-        dir_checkpoint = '/mnt/DataA/checkpoints/leo/'
 #         modelName = dir_checkpoint + 'unet_' + str(net.in_chans) + '_' + str(net.skip) +'_' + acceleration_fold +'f' + mode + '.pt'
 #         recName   = dir_checkpoint + 'TrainRec_unet_'+ str(net.in_chans) + '_' + str(net.skip) +'_'+ acceleration_fold +'f' + mode +'.npz'
         modelName = dir_checkpoint + f'unet_fbr_{str(net.in_chans)}_chans_{str(net.chans)}_epoch_{str(epoch)}.pt'
@@ -362,7 +361,7 @@ def get_args():
     parser.add_argument('-bg','--budget',metavar='BG',type=int,nargs='?',default=32,
                         help='number of high frequencies to sample', dest='budget')
     
-    parser.add_argument('-mp', '--mnet-path', type=str, default='/mnt/DataA/checkpoints/leo/mri/mnet_split_trained_cf_8_bg_32_unet_in_chan_1_epoch_12.pt',
+    parser.add_argument('-mp', '--mnet-path', type=str, default='/mnt/DataA/checkpoints/leo/mri/mnet_split_trained_cf_8_bg_32_unet_in_chan_1_epoch_9.pt',
                         help='path file for a mnet', dest='mnetpath')
     parser.add_argument('-up', '--unet-path', type=str, default=None,
                         help='path file for a unet', dest='unetpath')
@@ -419,9 +418,9 @@ if __name__ == '__main__':
     train_net(unet,\
               epochs=args.epochs,batchsize=args.batchsize,test_batchsize=args.test_batchsize,\
               lr=args.lr, lr_weight_decay=args.lrwd,\
-              lr_s_stepsize=40, lr_s_gamma=0.1, patience=2, min_lr=1e-8,\
+              lr_s_stepsize=40, lr_s_gamma=0.8, patience=5, min_lr=1e-6,reduce_factor=.8,\
               count_start=(args.epoch_start,args.batchind_start),\
-              p=1,\
+              p='fro',\
               mnet=mnet,\
               base=args.base_freq,budget=args.budget,\
               save_cp=True,mode=args.mode,histpath=args.histpath,mnetpath=args.mnetpath,\
