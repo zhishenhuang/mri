@@ -15,11 +15,11 @@ import random
 import copy
 
 from utils import *
-from mnet import MNet
+from mnet.mnet_v2 import MNet
 from mask_backward_v4 import mask_backward, mask_eval, ThresholdBinarizeMask
 
-sys.path.insert(0,'/home/leo/mri/unet/')
-from unet_model import UNet
+# sys.path.insert(0,'/home/leo/mri/unet/')
+from unet.unet_model import UNet
 
 torch.manual_seed(0)
 np.random.seed(0)
@@ -46,7 +46,7 @@ class alternating_trainer():
                  dtyp=torch.float,
                  count_start:tuple=(0,0),
                  dir_hist=None,
-                 dir_checkpoint:str='/home/huangz78/checkpoints/',
+                 dir_checkpoint:str='/mnt/shared_a/checkpoints/leo/mri/',
                  device=torch.device('cpu'),
                  seed:int=0
                 ):
@@ -65,16 +65,18 @@ class alternating_trainer():
         self.corefreq = corefreq
         self.budget = budget
         self.verbose = verbose
-        self.hfen = hfen,
+        self.hfen = hfen
         self.dtyp = dtyp
-        self.checkpoint = dir_checkpoint
+        self.dir_checkpoint = dir_checkpoint
+        self.dir_hist = dir_hist
         self.device = device
         self.seed = seed
+        self.count_start = count_start
         
-        if histpath is None:
+        if self.dir_hist is None:
             self.loss_before = list([]); self.loss_after = list([]); self.loss_rand = list([]); self.loss_val = list([])
         else:
-            histRec = np.load(dir_hist)
+            histRec = np.load(self.dir_hist)
             self.loss_before = list(histRec['loss_before'])
             self.loss_after  = list(histRec['loss_after'])
             self.loss_rand   = list(histRec['loss_rand'])
@@ -96,10 +98,10 @@ class alternating_trainer():
                     x_lf     = get_x_f_from_yfull(lowfreqmask,yfull)
                     mask_val = mnet_wrapper(self.mnet,x_lf,self.budget,imgshape,normalize=True,detach=True,device=self.device)
                 elif mnet.in_channels == 2:
-                    y = torch.zeros((yfull.shape[0],2,yfull.shape[1],yfull.shape[2]),dtype=torch.float,device=self.device)
+                    y = torch.zeros((yfull.shape[0],2,yfull.shape[1],yfull.shape[2]),dtype=self.dtyp,device=self.device)
                     y[:,0,lowfreqmask==1,:] = torch.real(yfull)[:,lowfreqmask==1,:]
                     y[:,1,lowfreqmask==1,:] = torch.imag(yfull)[:,lowfreqmask==1,:]
-                    mask_val = mnet_wrapper(mnet,y,budget,imgshape,normalize=True,detach=True,device=device)
+                    mask_val = mnet_wrapper(self.mnet,y,self.budget,imgshape,normalize=True,detach=True,device=self.device)
                 valerr = valerr + mask_eval(mask_val,xstar,mode='UNET',UNET=self.unet,dtyp=self.dtyp,hfen=self.hfen,device=self.device) # evaluation the equality of mnet masks
                 valbatchind += 1
                 if self.mnet.in_channels == 1:
@@ -113,13 +115,13 @@ class alternating_trainer():
     
     
     def save(self,epoch=0,batchind=None):
-        torch.save({'model_state_dict': self.mnet.state_dict()}, self.dir_checkpoint + 'mnet_split_trained_cf_'+ str(self.corefreq) + '_bg_'+str(self.budget) + '_unet_in_chan_' + str(self.unet.n_channels) + '.pt')
-        torch.save({'model_state_dict': self.unet.state_dict()}, self.dir_checkpoint + 'unet_split_trained_cf_'+ str(self.corefreq) + '_bg_'+str(self.budget) + '_unet_in_chan_' + str(self.unet.n_channels) + '.pt')
+        torch.save({'model_state_dict': self.mnet.state_dict()}, self.dir_checkpoint + 'mnet_v2_split_trained_cf_'+ str(self.corefreq) + '_bg_'+str(self.budget) + '_unet_in_chan_' + str(self.unet.in_chans) + '.pt')
+        torch.save({'model_state_dict': self.unet.state_dict()}, self.dir_checkpoint + 'unet_v2_split_trained_cf_'+ str(self.corefreq) + '_bg_'+str(self.budget) + '_unet_in_chan_' + str(self.unet.in_chans) + '.pt')
         if batchind is not None:
-            print(f'\t Checkpoint saved at epoch {epoch_count+1}, iter {self.global_step + 1}, batchind {batchind+1}!')
+            print(f'\t Checkpoint saved at epoch {epoch+1}, iter {self.global_step + 1}, batchind {batchind+1}!')
         else:
-            print(f'\t Checkpoint saved at epoch {epoch_count+1}, iter {self.global_step + 1}!')
-        filepath = self.dir_checkpoint + 'alternating_update_error_track_'+self.acceleration_fold+'fold_'+ 'unet_in_chan_' + str(self.unet.n_channels) + '.npz'
+            print(f'\t Checkpoint saved at epoch {epoch+1}, iter {self.global_step + 1}!')
+        filepath = self.dir_checkpoint + 'alternating_update_error_track_v2_'+self.acceleration_fold+'fold_'+ 'unet_in_chan_' + str(self.unet.in_chans) + '.npz'
         np.savez(filepath,loss_rand=self.loss_rand,loss_after=self.loss_after,loss_before=self.loss_before,loss_val=self.loss_val)
     
     
@@ -138,10 +140,10 @@ class alternating_trainer():
             unet_init = copy.deepcopy(self.unet)
             
         criterion_mnet = nn.BCEWithLogitsLoss()
-        optimizer_m = optim.RMSprop(mnet.parameters(), lr=lr_mn, weight_decay=0) # , momentum=0)
+        optimizer_m = optim.RMSprop(mnet.parameters(), lr=self.lr_mn, weight_decay=0) # , momentum=0)
         binarize = ThresholdBinarizeMask().apply
         
-        self.acceleration_fold = str(int(trainfulls.shape[1]/(corefreq+budget)))
+        self.acceleration_fold = str(int(trainfulls.shape[1]/(self.corefreq+self.budget)))
         
         # shuffling the training data
         shuffle_inds = torch.randperm(trainfulls.shape[0])
@@ -186,7 +188,7 @@ class alternating_trainer():
                         y[:,1,lowfreqmask==1,:] = torch.imag(yfull)[:,lowfreqmask==1,:]
     #                     highmask = mnet_wrapper(mnet,y,budget,imgshape,normalize=True,complete=False,detach=True,device=device)
                         highmask = self.mnet(y).detach()
-                    ######### check if highmask is repetitive
+                    ######### check if highmask is repetitive/degenerate #########
                     highmask_b = binarize( torch.sigmoid(highmask) )
                     diffcount = 0
                     for i in range(len(highmask)-1):
@@ -222,7 +224,7 @@ class alternating_trainer():
                         ########## adjust hyperparameters based on feedback: ##########
                         ###############################################################
     #                     print(iterprog + 'mask_sparsity_prenorm = ', mask_sparsity_prenorm)
-                        if loss_aft == np.inf:     # converged to degenerate mask, alpha too large, decrease alpha
+                        if loss_aft == np.inf:     # converged to degenerate mask
                             if (flag == 'no_change') or (flag == 'no_improve'):
                                 print(f'paradox: first {flag} then degenerate')
                                 flag = 'fail'
@@ -236,7 +238,7 @@ class alternating_trainer():
                                 alpha_ind += 1
                                 maxIter_mb_tmp = copy.deepcopy(self.maxIter_mb)
                                 subflag = 'up'
-                            else:
+                            else: # alpha too large, decrease alpha
                                 if subflag == 'up':
                                     print(f'paradox: first {flag}/{subflag} then degenerate/down')
                                     flag = 'fail'
@@ -247,7 +249,7 @@ class alternating_trainer():
                                 maxIter_mb_tmp += 1
                                 subflag = 'down'
                             flag = 'degenerate'
-                        elif loss_aft == loss_bef: # no change of mask happened, alpha too large, decrease alpha
+                        elif loss_aft == loss_bef: # no change of mask happened
                             if (flag == 'degenerate') or (flag == 'no_improve'):
                                 print(f'paradox: first {flag} then no change')
                                 flag = 'fail'
@@ -261,7 +263,7 @@ class alternating_trainer():
                                 alpha_ind += 1
                                 maxIter_mb_tmp = copy.deepcopy(self.maxIter_mb)
                                 subflag = 'up'
-                            else:
+                            else: # alpha too large, decrease alpha
                                 if subflag == 'up':
                                     print(f'paradox: first {flag}/{subflag} then no_change/down')
                                     flag = 'fail'
@@ -330,10 +332,10 @@ class alternating_trainer():
                         mask_rand = mask_rand.repeat(xstar.shape[0],1)
                         randqual  = mask_eval(mask_rand,xstar,mode='UNET',UNET=unet_init,dtyp=self.dtyp,hfen=self.hfen,device=self.device) # use fixed warmed-up unet as the reconstructor, Aug 30                
                         print(iterprog + f' quality of random   mask : {randqual}')
-                        loss_rand.append(randqual)  ## check mnet performance: does it beat random sampling?
+                        self.loss_rand.append(randqual)  ## check mnet performance: does it beat random sampling?
                     else:
                         print(iterprog + f' quality of random   mask : irrelevant')
-                        loss_rand.append(np.nan)
+                        self.loss_rand.append(np.nan)
                     ########################################  
                     ## (2) update mnet
                     ########################################  
@@ -387,10 +389,11 @@ class alternating_trainer():
 
     
 def get_args():
+    dir_checkpoints = '/mnt/shared_a/checkpoints/leo/mri/'
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     
-    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=2,
+    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=15,
                         help='Number of epochs', dest='epochs')
     parser.add_argument('-b', '--batch-size', metavar='B', type=int, nargs='?', default=5,
                         help='Batch size', dest='batchsize')
@@ -408,19 +411,17 @@ def get_args():
     
     parser.add_argument('-mp', '--mnet-path', type=str, default=None,
                         help='path file for a mnet', dest='mnetpath')
-    parser.add_argument('-up', '--unet-path', type=str, default='/home/huangz78/checkpoints/unet_1_True_8frand.pt',
+    parser.add_argument('-up', '--unet-path', type=str, default=dir_checkpoints + 'unet_1_True_8frand.pt',
                         help='path file for a unet', dest='unetpath')
     parser.add_argument('-hp', '--history-path', type=str, default=None,
                         help='path file for npz file recording training history', dest='histpath')
-    parser.add_argument('-uip', '--unet-init-path', type=str, default='/home/huangz78/checkpoints/unet_1_True_8frand.pt',
+    parser.add_argument('-uip', '--unet-init-path', type=str, default=dir_checkpoints + 'unet_1_True_8frand.pt',
                         help='path file for an initial unet', dest='unet_init_path')
     
     parser.add_argument('-mbit', '--mb-iter-max', type=int, default=20,
                         help='maximum interation for maskbackward function', dest='maxItermb')
-    parser.add_argument('-mnrep', '--mn-iter-rep', type=int, default=60,
+    parser.add_argument('-mnrep', '--mn-iter-rep', type=int, default=40,
                         help='inside one batch, updating mnet this many times', dest='mnRep')   
-#     parser.add_argument('-valfreq', '--validate-every', type=int, default=100,
-#                         help='do validation every # steps', dest='validate_every')
     
     parser.add_argument('-bs','--base-size',metavar='BS',type=int,nargs='?',default=8,
                         help='number of observed low frequencies', dest='base_freq')
@@ -432,7 +433,7 @@ def get_args():
     parser.add_argument('-c', '--c-param', type=float, default=5e-4,
                         help='magnitude for consistency penalty in loss function', dest='c')
     
-    parser.add_argument('-ngpu', '--num-gpu', type=int, default=0,
+    parser.add_argument('-ngpu', '--num-gpu', type=int, default=1,
                         help='number of GPUs', dest='ngpu')
     parser.add_argument('-uc', '--unet-channels', type=int, default=1,
                         help='number of Unet input channcels', dest='n_channels')
@@ -473,7 +474,7 @@ if __name__=='__main__':
     mnet.eval()
     
     ### load a unet for maskbackward
-    unet = UNet(n_channels=args.n_channels,n_classes=1,bilinear=(not args.skip),skip=args.skip).to(device)
+    unet = UNet(in_chans=args.n_channels,n_classes=1,bilinear=(not args.skip),skip=args.skip).to(device)
     unetpath = args.unetpath
     if unetpath is not None:
         checkpoint = torch.load(unetpath)
@@ -487,7 +488,7 @@ if __name__=='__main__':
     
     unetinitpath = args.unet_init_path
     if unetinitpath is not None:
-        unet_init = UNet(n_channels=args.n_channels,n_classes=1,bilinear=(not args.skip),skip=args.skip).to(device)
+        unet_init = UNet(in_chans=args.n_channels,n_classes=1,bilinear=(not args.skip),skip=args.skip).to(device)
         checkpoint = torch.load(unetinitpath)
         unet_init.load_state_dict(checkpoint['model_state_dict'])
         print('Unet_init loaded successfully from: ' + unetinitpath )
@@ -495,7 +496,7 @@ if __name__=='__main__':
         unet_init = None
         
     # load training data
-    train_dir = '/mnt/shared_a/data/fastMRI/knee_singlecoil_train.npz'
+    train_dir = '/mnt/shared_a/fastMRI/knee_singlecoil_train.npz'
     train_xfull = torch.tensor(np.load(train_dir)['data']).to(torch.float)
     train_yfull = None
 
@@ -504,7 +505,7 @@ if __name__=='__main__':
     print('train data size:', train_xfull.shape)
     
     # load validation data 
-    val_dir = '/mnt/shared_a/data/fastMRI/knee_singlecoil_val.npz'
+    val_dir = '/mnt/shared_a/fastMRI/knee_singlecoil_val.npz'
     val_xfull = torch.tensor(np.load(val_dir)['data']).to(torch.float)
     val_yfull = None
 
@@ -517,30 +518,30 @@ if __name__=='__main__':
     
     print(args)
     
-    alternating_trainer(mnet=mnet, unet=unet,
-                         maxIter_mb=args.maxItermb,
-                         alpha=args.alpha,
-                         c=args.c,
-                         maxRep=args.mnRep,
-                         lr_mb=args.lrb,
-                         lr_mn=args.lrn,
-                         lr_u=args.lru,
-                         epochs=args.epochs,
-                         batchsize=args.batchsize,
-                         valbatchsize=5,
-                         corefreq=args.base_freq,
-                         budget=args.budget,
-                         verbose=False,
-                         hfen=False,
-                         dtyp=torch.float,
-                         count_start=(args.epoch_start,args.batchind_start),
-                         dir_hist=args.histpath,
-                         dir_checkpoint='/home/huangz78/checkpoints/leo/mri/',
-                         device=device,
-                         seed:int=args.seed)
+    trainer = alternating_trainer(mnet=mnet, unet=unet, \
+                        maxIter_mb=args.maxItermb,\
+                        alpha=args.alpha,\
+                        c=args.c,\
+                        maxRep=args.mnRep,\
+                        lr_mb=args.lrb,\
+                        lr_mn=args.lrn,\
+                        lr_u=args.lru,\
+                        epochs=args.epochs,\
+                        batchsize=args.batchsize,\
+                        valbatchsize=5,\
+                        corefreq=args.base_freq,\
+                        budget=args.budget,\
+                        verbose=False,\
+                        hfen=False,\
+                        dtyp=torch.float,\
+                        count_start=(args.epoch_start,args.batchind_start),\
+                        dir_hist=args.histpath,\
+                        dir_checkpoint='/mnt/shared_a/checkpoints/leo/mri/',\
+                        device=device,\
+                        seed=args.seed)
     
-    alternating_trainer.run(train_xfull,val_xfull,train_yfulls=train_yfull,val_yfulls=val_yfull,
-                            unet_init=unet_init,save_cp=False)
+    trainer.run(train_xfull,val_xfull,train_yfulls=train_yfull, val_yfulls=val_yfull,\
+                            unet_init=unet_init,save_cp=True)
     
 
     print('\n ~Training concluded!')

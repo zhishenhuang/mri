@@ -85,12 +85,12 @@ def mask_eval(fullmask,xstar,\
             z[ind,fullmask[ind,:]==1,:] = y[ind,fullmask[ind,:]==1,:]   
         if mode=='UNET' and (UNET is not None):
             z = F.ifftshift(z , dim=(1,2)) 
-            if UNET.n_channels == 2:
+            if UNET.in_chans == 2:
                 x_ifft = F.ifftn(z,dim=(1,2),norm='ortho') 
                 x_in   = torch.zeros((batchsize,2,imgHeg,imgWid),dtype=dtyp,device=device)
                 x_in[:,0,:,:] = torch.real(x_ifft)
                 x_in[:,1,:,:] = torch.imag(x_ifft)           
-            elif UNET.n_channels == 1:
+            elif UNET.in_chans == 1:
                 x_ifft = torch.abs( F.ifftn(z,dim=(1,2),norm='ortho') ) 
                 x_in   = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
             x = UNET(x_in).detach()
@@ -207,10 +207,10 @@ def mask_backward(highmask,xstar,\
    
     if mode == 'UNET':
         if unet is None:
-            unet =  UNet(n_channels=unet_mode,n_classes=unet_mode,bilinear=True,skip=False).to(device)
-            checkpoint = torch.load('/home/huangz78/mri/checkpoints/unet_'+ str(unet.n_channels) +'.pth')
+            unet =  UNet(in_chans=unet_mode,n_classes=unet_mode,bilinear=True,skip=False).to(device)
+            checkpoint = torch.load('/home/huangz78/mri/checkpoints/unet_'+ str(unet.in_chans) +'.pth')
             unet.load_state_dict(checkpoint['model_state_dict'])
-            print('Unet loaded successfully from : ' + '/home/huangz78/mri/checkpoints/unet_'+ str(unet.n_channels) +'.pth' )
+            print('Unet loaded successfully from : ' + '/home/huangz78/mri/checkpoints/unet_'+ str(unet.in_chans) +'.pth' )
             unet.train()
 
             optimizer = optim.RMSprop([
@@ -241,12 +241,12 @@ def mask_backward(highmask,xstar,\
         z = F.ifftshift(z , dim=(1,2)) 
         ## Reconstruction process
         if mode == 'UNET':
-            if unet.n_channels == 2:
+            if unet.in_chans == 2:
                 x_ifft = F.ifftn(z,dim=(1,2),norm='ortho')
                 x_in   = torch.zeros((batchsize,2,imgHeg,imgWid),dtype=dtyp,device=device)
                 x_in[:,0,:,:] = torch.real(x_ifft)
                 x_in[:,1,:,:] = torch.imag(x_ifft)              
-            elif unet.n_channels == 1:
+            elif unet.in_chans == 1:
                 x_ifft = torch.abs(F.ifftn(z,dim=(1,2),norm='ortho')) 
                 x_in   = x_ifft.view(batchsize,1,imgHeg,imgWid).to(dtyp)
             x = unet(x_in)
