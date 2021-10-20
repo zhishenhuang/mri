@@ -16,7 +16,6 @@ from unet.unet_model_fbr import Unet
 from unet.unet_model_banding_removal_fbr import UnetModel
 from mnet import MNet
 from MoDL.MoDL import MoDL, MoDL_trainer
-from pathlib import Path
 import copy
 dir_checkpoint = '/mnt/shared_a/checkpoints/leo/recon/'
 
@@ -242,7 +241,7 @@ if __name__ == '__main__':
     elif args.skip == 'True':
         args.skip = True
     device = torch.device("cuda:0" if (torch.cuda.is_available() and args.ngpu > 0) else "cpu")
-    unetpath = Path(args.unetpath) if args.unetpath is not None else None
+    unetpath = args.unetpath if args.unetpath is not None else None
     
     modl = MoDL(in_chans=args.in_chans,out_chans=2,chans=args.chans,num_pool_layers=4,drop_prob=0,unet_path=unetpath).to(device)
    
@@ -255,11 +254,11 @@ if __name__ == '__main__':
     else:
         mnet = None
     
-    train_in, train_label, train_mask, val_in, val_label, val_mask = prepare_data(mode=args.mode,mnet=mnet, base=args.base_freq, budget=args.budget,batchsize=args.batchsize,unet_inchans=2,datatype=torch.float,device=device)
+    train_in, train_label, train_mask, val_in, val_label, val_mask = prepare_data(mode=args.mode,mnet=mnet,base=args.base_freq, budget=args.budget,batchsize=args.batchsize,unet_inchans=2,datatype=torch.float,device=device)
     del mnet
     
     trainer = MoDL_trainer(modl,
-                           save_dir=Path(dir_checkpoint),
+                           save_dir=dir_checkpoint,
                            lr=args.lr,
                            lr_weight_decay=args.lrwd,
 #                            lr_s_stepsize=40,
@@ -274,7 +273,9 @@ if __name__ == '__main__':
                            hist_dir=args.histpath,
                            batchsize=args.batchsize,
                            valbatchsize=args.val_batchsize,
-                           epochs=args.epochs)
+                           epochs=args.epochs,
+                           weight_ssim=10,
+                           mnetpath=args.mnetpath)
     
     trainer.run(train_in,train_label,train_mask, val_in,val_label, val_mask, save_cp=True)
     

@@ -1,4 +1,5 @@
 import sys
+import os
 import torch
 import torch.nn as nn
 import numpy as np
@@ -11,7 +12,7 @@ from torch.optim import RMSprop, Adam
 from unet.unet_model_fbr import Unet
 import MoDL.utils_MoDL as utils
 
-from utils import lpnorm
+from utils import lpnorm, ssim_uniform
 
 def CG(output, tol ,L, smap, mask, alised_image):
     return utils.CG.apply(output, tol, L, smap, mask, alised_image)
@@ -23,13 +24,13 @@ class MoDL(nn.Module):
                  chans: int = 32,
                  num_pool_layers: int = 4,
                  drop_prob: float = 0.0,
-                 unet_path: Path = None,
+                 unet_path: str = None,
                  CG_steps: int = 6,
                  CG_tol: float = 5e-5, 
                  CG_L: float = 1.,
     ):
         super(MoDL, self).__init__()
-        self.model = Unet(in_chans=in_chans,out_chans=out_chans,num_pool_layers=num_pool_layers,drop_prob=drop_prob)
+        self.model    = Unet(in_chans=in_chans,out_chans=out_chans,num_pool_layers=num_pool_layers,drop_prob=drop_prob)
         self.CG_steps = CG_steps
         self.CG_tol   = CG_tol
         self.CG_L     = CG_L
@@ -55,13 +56,14 @@ class MoDL(nn.Module):
 class MoDL_trainer:
     def __init__(self,
                  model: nn.Module,
-                 save_dir: Path,
+                 save_dir: str,
                  epochs=1,
                  lr=1e-4, 
                  lr_weight_decay=0,
                  batchsize=3, 
                  valbatchsize=5,
                  count_start=(0,0),
+                 weight_ssim=.7,
                  ngpu=0,
                  hist_dir:str=None,
                  mnetpath:str=None): 
@@ -75,35 +77,49 @@ class MoDL_trainer:
         self.batchsize = batchsize
         self.valbatchsize = valbatchsize
         self.count_start = count_start
+        self.weight_ssim = 5
         self.device = torch.device('cuda:0') if ((torch.cuda.is_available()) and (ngpu>0)) else torch.device('cpu')
-        
-        if hist_dir is None:
-            self.val_loss         = []
+        self.mnetpath = mnetpath
+        if hist_dir is None:          
             self.train_loss_epoch = []
             self.train_loss       = []
+            self.train_ssim       = []
+            self.train_lp         = []
+            self.val_loss         = []
+            self.val_ssim         = []
+            self.val_lp           = []          
         else:
             histRec = np.load(hist_dir)
-            self.val_loss         = list(histRec[valloss_epoch])
-            self.train_loss_epoch = list(histRec[trainloss_epoch])
+            self.train_ssim       = list(histRec[train_ssim])
+            self.train_lp         = list(histRec[train_lp])
             self.train_loss       = list(histRec[trainloss])
-    
+            self.train_loss_epoch = list(histRec[trainloss_epoch])           
+            self.val_loss         = list(histRec[valloss_epoch])
+            self.val_ssim         = list(histRec[val_ssim])
+            self.val_lp           = list(histRec[val_lp])
     def empty_cache(self):
         torch.cuda.empty_cache()
         torch.backends.cuda.cufft_plan_cache.clear()
     
-    def save_model(self,epoch=0):
-        recName = self.save_dir + f'Hist_MoDL_{str(self.model.in_chans)}_chans_{str(self.model.chans)}_epoch_{str(epoch)}.npz'
+    def save_model(self,epoch=0,batchind=None):
+        recName = self.save_dir + f'Hist_MoDL_{self.model.model.in_chans}_chans_{self.model.model.chans}_epoch_{epoch}.npz'
         np.savez(recName,\
-                 trainloss=self.train_loss,trainloss_epoch=self.train_loss_epoch,\
-                 valloss_epoch=self.val_loss,mnetpath=self.mnetpath)
+                 trainloss=self.train_loss,trainloss_epoch=self.train_loss_epoch,train_lp=self.train_lp,train_ssim=self.train_ssim,\
+                 valloss_epoch=self.val_loss,val_ssim=self.val_ssim,val_lp=self.val_lp,\
+                 mnetpath=self.mnetpath)
         print(f'\t History saved after epoch {epoch + 1}!')
         
-        modelName = self.save_dir + f'MoDL_{str(self.model.in_chans)}_chans_{str(self.model.chans)}_epoch_{str(epoch)}.pt'
-        torch.save({'model_state_dict': self.model.state_dict()}, modelName)                
-        print(f'\t Checkpoint saved after epoch {epoch + 1}!')        
+        modelName = self.save_dir + f'MoDL_{self.model.model.in_chans}_chans_{self.model.model.chans}_epoch_{epoch}.pt'
+        torch.save({'model_state_dict': self.model.state_dict()}, modelName)  
+        if batchind is None:
+            print(f'\t Checkpoint saved after epoch {epoch + 1}!') 
+        else:
+            print(f'\t Checkpoint saved after epoch {epoch + 1}, batchind {batchind+1}!')
         
     def validate(self,data,labels,masks,epoch=-1):
-        valloss = 0
+        
+        loss_lp = 0
+        loss_ssim = 0
         n_val = data.shape[0]
         batchnums = int(np.ceil(n_val/self.valbatchsize))
         self.model.eval()
@@ -117,11 +133,16 @@ class MoDL_trainer:
                 smap       = torch.ones(databatch.shape,device=self.device).unsqueeze(1) # single coil setting, needs to be changed for multi-coil setting
                 
                 MoDL_res = self.model(databatch,smap,maskbatch)
-                loss = lpnorm(MoDL_res[:,0:1,:,:], labelbatch, mode='mean')
-                valloss += loss.item()
+                
+                loss_lp   += lpnorm(MoDL_res[:,0:1,:,:], labelbatch, mode='mean')
+                loss_ssim += (-ssim_uniform(MoDL_res[:,0:1,:,:],labelbatch))
+#                 loss      += loss_lp + self.weight_ssim * loss_ssim
                 batchind += 1 
-            self.val_loss.append(valloss/batchnums)
-            print(f' [{epoch+1}/{self.epochs}] loss/VAL: {valloss/batchnums:.4f}')                    
+            valloss = loss_lp.item() + self.weight_ssim*loss_ssim.item()
+            self.val_loss.append( valloss/batchnums )
+            self.val_lp.append( loss_lp.item()/batchnums )
+            self.val_ssim.append( -loss_ssim.item()/batchnums )
+            print(f' [{epoch+1}/{self.epochs}] L2loss/VAL: {loss_lp.item()/batchnums:.4f}, SSIM/VAL: {-loss_ssim.item()/batchnums:.4f}, Loss/VAL:{valloss/batchnums:.4f}')                    
                 
     def run(self,traindata,trainlabels,trainmasks,valdata,vallabels,valmasks,save_cp=True):
         '''
@@ -151,36 +172,50 @@ class MoDL_trainer:
         
         self.model.train()
         self.validate(valdata,vallabels,valmasks)
-        for epoch in range(self.count_start[0],self.epochs):
-            trainloss_epoch = 0
-            batchind = 0 if epoch!=self.count_start[0] else self.count_start[1]
-            while batchind < batchnums:
-                batch          = torch.arange(batchind*self.batchsize,min((batchind+1)*self.batchsize,n_train))
-                databatch      = traindata[batch,:,:,:].to(self.device)
-                labelbatch     = trainlabels[batch,:,:,:].to(self.device)
-                label          = torch.zeros(batch.shape[0],2,databatch.shape[2],databatch.shape[3],device=self.device)
-                label[:,0,:,:] = labelbatch[:,0,:,:]
-                maskbatch      = trainmasks[batch].to(self.device)
-                smap           = torch.ones(databatch.shape,device=self.device).unsqueeze(1) # single coil setting, needs to be changed for multi-coil setting
-                MoDL_out = self.model(databatch,smap,maskbatch)
-                
-                optimizer.zero_grad()
-                loss = lpnorm(MoDL_out, label, mode='no_normalization')
-                loss.backward()
-                optimizer.step()
-                trainloss_epoch += loss.item()
-                self.train_loss.append(loss.item())
-                with torch.no_grad():
-                    l2loss_batch = lpnorm(MoDL_out[:,0:1,:,:],labelbatch,mode='mean')
-                print(f'[{global_step}][{epoch+1}/{self.epochs}][{batchind+1}/{batchnums}] loss/train: {loss.item():.4f}, l2loss: {l2loss_batch.item():.4f}')
-                global_step += 1
-                batchind += 1           
-            self.train_loss_epoch.append(trainloss_epoch/train_batchnums)  
-            print(f'[{global_step}][{epoch+1}/{self.epochs}] loss/train: {trainloss_epoch/train_batchnums}')          
-            self.empty_cache()           
-            self.validate(valdata,vallabels,valmasks,epoch=epoch)
+        try:
+            for epoch in range(self.count_start[0],self.epochs):
+                trainloss_epoch = 0
+                batchind = 0 if epoch!=self.count_start[0] else self.count_start[1]
+                while batchind < batchnums:
+                    batch          = torch.arange(batchind*self.batchsize,min((batchind+1)*self.batchsize,n_train))
+                    databatch      = traindata[batch,:,:,:].to(self.device)
+                    labelbatch     = trainlabels[batch,:,:,:].to(self.device)
+                    label          = torch.zeros(batch.shape[0],2,databatch.shape[2],databatch.shape[3],device=self.device)
+                    label[:,0,:,:] = labelbatch[:,0,:,:]
+                    maskbatch      = trainmasks[batch].to(self.device)
+                    smap           = torch.ones(databatch.shape,device=self.device).unsqueeze(1) # single coil setting, needs to be changed for multi-coil setting
+                    MoDL_out = self.model(databatch,smap,maskbatch)
+
+                    optimizer.zero_grad()
+
+                    loss_lp   = lpnorm(MoDL_out, label, mode='no_normalization')
+                    loss_ssim = -ssim_uniform(MoDL_out,label)
+                    loss = loss_lp + self.weight_ssim * loss_ssim
+                    loss.backward()
+                    optimizer.step()
+                    trainloss_epoch += loss.item()
+                    self.train_loss.append(loss.item())
+                    self.train_ssim.append(-loss_ssim.item())
+                    with torch.no_grad():
+                        l2loss_batch = lpnorm(MoDL_out[:,0:1,:,:],labelbatch,mode='mean')
+                    self.train_lp.append(l2loss_batch.item())                
+                    print(f'[{global_step}][{epoch+1}/{self.epochs}][{batchind+1}/{batchnums}] loss/train: {loss.item():.4f}, l2loss: {l2loss_batch.item():.4f}, ssim: {-loss_ssim.item():.4f}')
+                    global_step += 1
+                    batchind += 1           
+                self.train_loss_epoch.append(trainloss_epoch/batchnums)  
+                print(f'[{global_step}][{epoch+1}/{self.epochs}] loss/train: {trainloss_epoch/batchnums}')          
+                self.empty_cache()           
+                self.validate(valdata,vallabels,valmasks,epoch=epoch)
+                if save_cp:
+                    self.save_model(epoch=epoch)
+        except KeyboardInterrupt:
+            print('Keyboard Interrupted! Exit~')
             if save_cp:
-                self.savemodel(epoch=epoch)
+                self.save_model(epoch=epoch,batchind=batchind)
+            try:
+                sys.exit(0)
+            except SystemExit:
+                os._exit(0)
                 
                 
                 
