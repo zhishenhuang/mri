@@ -10,10 +10,10 @@ import torch.nn as nn
 import torch.nn.functional as Func
 import torch.optim as optim
 import utils
+from utils import *
 import logging
 import matplotlib.pyplot as plt
 from sigpy.mri.app import TotalVariationRecon
-from utils import *
 from solvers import ADMM_TV
 import copy
 
@@ -79,12 +79,12 @@ def mask_eval(fullmask,xstar,\
         batchsize = xstar.shape[0]; imgHeg = xstar.shape[1]; imgWid = xstar.shape[2]
 #         for layer in range(batchsize):
 #             xstar[layer,:,:] = xstar[layer,:,:]/torch.max(torch.abs(xstar[layer,:,:].flatten()))
-        y = torch.fft.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho'),dim=(1,2))    
+        y = F.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho'),dim=(1,2))    
         z = torch.zeros(y.shape,device=device).to(y.dtype)
         for ind in range(batchsize):
             z[ind,fullmask[ind,:]==1,:] = y[ind,fullmask[ind,:]==1,:]   
         if mode=='UNET' and (UNET is not None):
-            z = torch.fft.ifftshift(z , dim=(1,2)) 
+            z = F.ifftshift(z , dim=(1,2)) 
             if UNET.n_channels == 2:
                 x_ifft = F.ifftn(z,dim=(1,2),norm='ortho') 
                 x_in   = torch.zeros((batchsize,2,imgHeg,imgWid),dtype=dtyp,device=device)
