@@ -60,7 +60,7 @@ class LOUPE(nn.Module):
             self.samplers.append(sampler)
         
         if unet is None:
-            self.unet = UNet(n_channels=n_channels,n_classes=1,bilinear=(not unet_skip),skip=unet_skip)
+            self.unet = UNet(in_chans=n_channels,n_classes=1,bilinear=(not unet_skip),skip=unet_skip)
         else:
             self.unet = unet
 #         if in_chans == 1:
