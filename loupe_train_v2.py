@@ -13,7 +13,7 @@ from loupe_env.line_sampler import *
 from loupe_env.loupe_wrap import *
 
 import utils
-from utils import kplot
+from utils import *
 from unet.unet_model import UNet
 
 torch.manual_seed(0)
@@ -71,19 +71,22 @@ class loupe_trainer:
         
         
         if histpath is None:
-            self.train_loss = []; self.val_loss = []
+            self.train_loss = []; self.l2_val = []; self.ssim_val = []
         else:
-            histRec    = np.load(histpath)
+            histRec         = np.load(histpath)
             self.train_loss = list(histRec['loss_train'])
-            self.val_loss   = list(histRec['loss_val'])
+            self.l2_val     = list(histRec['l2_val'])
+            self.ssim_val   = list(histRec['ssim_val'])
             print('training history file successfully loaded from the path: ', histpath)
         
     def validate(self, valdata):
         valbatchind = 0
         valbatch_nums = int(np.ceil(valdata.shape[0]/self.val_batchsize))
         self.model.eval()
-        criterion = nn.L1Loss()
-        loss_val = 0
+        criterion = nn.MSELoss()
+        l2loss = 0
+        ssim   = 0
+        
         while (valbatchind < valbatch_nums):
             batch = np.arange(batchsize_val*valbatchind, min(batchsize_val*(valbatchind+1),valdata.shape[0]))
             databatch = normalize_data(valdata[batch,:,:]) if len(batch)>1 else normalize_data(valdata[batch,:,:].unsqueeze(0))
@@ -91,11 +94,13 @@ class loupe_trainer:
             ystar = F.fftn(xstar,dim=(2,3),norm='ortho')
             x_recon,_ = self.model(ystar)
             x_recon   = x_recon.detach()
-            loss_val += self.criterion(x_recon,xstar)
+            l2loss += criterion(x_recon,xstar)
+            ssim   += ssim_uniform(x_recon,xstar)
             valbatchind += 1
         progress_str = f'[{epoch+1}/{epochs}]'
-        print('\n' + progress_str + f' validation loss: {loss_val.item()/valbatch_nums}')
-        self.val_loss.append(loss_val.item()/valbatch_nums)
+        print('\n' + progress_str + f' L2 loss/VAL: {l2loss.item()/valbatch_nums}, SSIM/VAL: {ssim.item()/valbatch_nums}')
+        self.l2_val.append(l2loss.item()/valbatch_nums)
+        self.ssim_val.append(ssim.item()/valbatch_nums)
     
     def save(self,epoch=0):
         try:
@@ -105,7 +110,7 @@ class loupe_trainer:
             pass
         info_str = f'spar_{sparsity}_base_{preselect_num}'
         torch.save({'model_state_dict': self.model.state_dict()}, self.dir_checkpoint + f'loupe_{info_str}_epoch_{epoch}.pt')
-        np.savez(self.dir_checkpoint + f'loupe_{info_str}_epoch_{epoch}_history.npz', loss_train=self.train_loss, loss_val=self.val_loss)
+        np.savez(self.dir_checkpoint + f'loupe_{info_str}_epoch_{epoch}_history.npz', loss_train=self.train_loss, l2_val=self.l2_val,ssim_val=self.ssim_val)
         print(f'\t Checkpoint for Loupe saved after epoch {epoch + 1}!' + '\n')
         
     def run(self, traindata, valdata, save_cp=False):
@@ -114,11 +119,10 @@ class loupe_trainer:
         '''
         shape   = traindata.shape[1:3]
         batch_nums  = int(np.ceil(traindata.shape[0]/self.batchsize))
-        optimizer = optim.RMSprop([
-                    {'params': loupe.samplers.parameters()},
-                    {'params': loupe.unet.parameters(),'lr':lru}
-                ], lr=lrm, weight_decay=weight_decay, momentum=momentum,eps=1e-10)
-        criterion = nn.L1Loss()
+        optimizer = optim.RMSprop([{'params': loupe.samplers.parameters()},
+                                   {'params': loupe.unet.parameters(),'lr':lru}
+                                  ], lr=lrm, weight_decay=weight_decay,eps=1e-10)
+        criterion = nn.MSELoss()
         epoch = self.epoch_start 
         batchind = self.batchind_start
         try:

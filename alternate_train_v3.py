@@ -109,20 +109,20 @@ class alternating_trainer():
                 elif self.mnet.in_channels == 2:
                     del xstar, yfull, y
             self.loss_val.append(valerr/valbatch_nums)
-            print(f'\n [{self.global_step+1}][{epoch+1}/{self.epochs}] validation error: {valerr/valbatch_nums} \n')
-            
+            print(f'\n [{self.global_step+1}][{epoch+1}/{self.epochs}] validation error: {valerr/valbatch_nums} \n')            
             torch.cuda.empty_cache()
     
     
     def save(self,epoch=0,batchind=None):
-        torch.save({'model_state_dict': self.mnet.state_dict()}, self.dir_checkpoint + 'mnet_v2_split_trained_cf_'+ str(self.corefreq) + '_bg_'+str(self.budget) + '_unet_in_chan_' + str(self.unet.in_chans) + '.pt')
-        torch.save({'model_state_dict': self.unet.state_dict()}, self.dir_checkpoint + 'unet_v2_split_trained_cf_'+ str(self.corefreq) + '_bg_'+str(self.budget) + '_unet_in_chan_' + str(self.unet.in_chans) + '.pt')
+        torch.save({'model_state_dict': self.mnet.state_dict()}, self.dir_checkpoint + f'mnet_v2_split_trained_cf_{self.corefreq}_bg_{self.budget}_unet_in_chan_{self.unet.in_chans}_epoch{epoch}.pt')
+        torch.save({'model_state_dict': self.unet.state_dict()}, self.dir_checkpoint + f'unet_v2_split_trained_cf_{self.corefreq}_bg_{self.budget}_unet_in_chan_{self.unet.in_chans}_epoch{epoch}.pt')
         if batchind is not None:
             print(f'\t Checkpoint saved at epoch {epoch+1}, iter {self.global_step + 1}, batchind {batchind+1}!')
         else:
             print(f'\t Checkpoint saved at epoch {epoch+1}, iter {self.global_step + 1}!')
         filepath = self.dir_checkpoint + 'alternating_update_error_track_v2_'+self.acceleration_fold+'fold_'+ 'unet_in_chan_' + str(self.unet.in_chans) + '.npz'
         np.savez(filepath,loss_rand=self.loss_rand,loss_after=self.loss_after,loss_before=self.loss_before,loss_val=self.loss_val)
+        torch.cuda.empty_cache()
     
     
     def run(self,trainfulls,valfulls,train_yfulls=None,val_yfulls=None,unet_init=None,save_cp=False):   
@@ -393,7 +393,7 @@ def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     
-    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=15,
+    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=10,
                         help='Number of epochs', dest='epochs')
     parser.add_argument('-b', '--batch-size', metavar='B', type=int, nargs='?', default=5,
                         help='Batch size', dest='batchsize')
@@ -462,7 +462,7 @@ if __name__=='__main__':
     random.seed(args.seed)
     
     ### load a mnet
-    mnet = MNet(beta=1,in_channels=2,out_size=320-args.base_freq, imgsize=(320,320),poolk=3).to(device)
+    mnet = MNet(beta=1,in_chans=2,out_size=320-args.base_freq, imgsize=(320,320),poolk=3).to(device)
     if args.mnetpath is not None:
         mnetpath = args.mnetpath
         checkpoint = torch.load(mnetpath)

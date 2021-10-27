@@ -82,9 +82,9 @@ class OutConv(nn.Module):
 
 
 class MNet(nn.Module):
-    def __init__(self, in_channels=1,imgsize=320,out_size=320,beta=1,poolk=3):
+    def __init__(self, in_chans=1,imgsize=320,out_size=320,beta=1,poolk=3):
         super(MNet, self).__init__()
-        self.in_channels = in_channels
+        self.in_channels = in_chans
         
         if isinstance(imgsize,int):
             self.imgHeg = imgsize
@@ -97,7 +97,7 @@ class MNet(nn.Module):
         self.out_size = out_size
         
         ## network part
-        self.inc   = DoubleConv(in_channels, 128)
+        self.inc   = DoubleConv(self.in_channels, 128)
         self.down1 = Down(128, 256,poolk=poolk)
         self.down2 = Down(256, 512,poolk=poolk)
         self.down3 = Down(512, 1024,poolk=poolk)

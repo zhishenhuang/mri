@@ -68,7 +68,7 @@ def mnet_getinput(mnet,data,base=8,budget=32,batchsize=10,unet_channels=1,return
     else:
         return x_ifft
     
-def rand_getinput(data,base=8,budget=32,batchsize=5,datatype=torch.float):
+def base_getinput(data,base=8,budget=32,batchsize=5,unet_channels=1,datatype=torch.float,mode='rand'):
     '''
     assume the input data has the dimension [img,heg,wid]
     returned data in the format [NCHW]
@@ -80,19 +80,24 @@ def rand_getinput(data,base=8,budget=32,batchsize=5,datatype=torch.float):
     batchnums = int(np.ceil(num_pts/batchsize))      
     while batchind < batchnums:
         batch  = torch.arange(batchind*batchsize,min((batchind+1)*batchsize,num_pts))
-        lfmask = mask_naiveRand(data.shape[1],fix=base,other=budget,roll=False)[0] 
+        if   mode == 'rand':
+            lfmask = mask_naiveRand(data.shape[1],fix=base,other=budget,roll=False)[0] 
+        if   mode == 'lfonly':
+            lfmask = mask_naiveRand(data.shape[1],fix=base+budget,other=0,roll=False)[0]
+        elif mode == 'equidist':
+            lfmask = mask_equidist(data.shape[1],fix=base,other=budget,roll=False)
         batchdata_full = yfull[batch,:,:]
         batchdata      = torch.zeros_like(batchdata_full)
         batchdata[:,lfmask==1,:] = batchdata_full[:,lfmask==1,:]
         y_lf[batch,:,:] = batchdata
         batchind += 1
     
-    if net.in_chans == 2:                
+    if unet_channels == 2:                
         x_ifft = F.ifftn(y_lf,dim=(1,2),norm='ortho')
         x_in   = torch.zeros((num_pts,2,heg,wid),dtype=datatype)
         x_in[:,0,:,:] = torch.real(x_ifft)
         x_in[:,1,:,:] = torch.imag(x_ifft)       
-    elif net.in_chans == 1:
+    elif unet_channels == 1:
         x_ifft = torch.abs(F.ifftn(y_lf,dim=(1,2),norm='ortho'))                
         x_in   = torch.reshape(x_ifft, (num_pts,1,heg,wid)).to(datatype)
     
@@ -135,10 +140,10 @@ def prepare_data(mode='mnet',mnet=None, base=8, budget=32,batchsize=5,unet_incha
         for ind in range(train_full.shape[0]):
             train_full[ind,:,:] = train_full[ind,:,:]/train_full[ind,:,:].abs().max()
         for ind in range(val_full.shape[0]):
-            val_full[ind,:,:] = val_full[ind,:,:]/val_full[ind,:,:].abs().max()        
+            val_full[ind,:,:]   = val_full[ind,:,:]/val_full[ind,:,:].abs().max()        
 
-        train_in = rand_getinput(train_full,base=base,budget=budget,batchsize=batchsize,datatype=datatype)
-        val_in   = rand_getinput(val_full,base=base,budget=budget,batchsize=batchsize,datatype=datatype)
+        train_in = base_getinput(train_full,base=base,budget=budget,batchsize=batchsize,unet_channels=unet_inchans,datatype=datatype)
+        val_in   = base_getinput(val_full,base=base,budget=budget,batchsize=batchsize,unet_channels=unet_inchans,datatype=datatype)
 
         train_label = torch.reshape(train_full,(train_full.shape[0],1,train_full.shape[1],train_full.shape[2]))
         val_label  = torch.reshape(val_full,(val_full.shape[0],1,val_full.shape[1],val_full.shape[2]))
@@ -166,10 +171,10 @@ def prepare_data(mode='mnet',mnet=None, base=8, budget=32,batchsize=5,unet_incha
 
         train_full = imgs[traininds,:,:]
         train_label= torch.reshape(train_full,(n_train,1,Heg,Wid))
-        valfull   = imgs[valinds,:,:]
-        val_label = torch.reshape(valfull,(n_val,1,Heg,Wid))
+        valfull    = imgs[valinds,:,:]
+        val_label  = torch.reshape(valfull,(n_val,1,Heg,Wid))
         train_in   = xs[traininds,:,:,:]
-        val_in    = xs[valinds ,:,:,:]
+        val_in     = xs[valinds ,:,:,:]
         print('n_train = {}, n_val = {}'.format(n_train,n_val))
         del xs, imgs, masks
         
@@ -403,6 +408,8 @@ def get_args():
     
     parser.add_argument('-sd', '--seed', type=int, default=0,
                         help='random seed', dest='seed')
+    parser.add_argument('-wssim', '--weight-ssim', metavar='WS', type=float, nargs='?', default=.9,
+                        help='weight of SSIM loss in training', dest='weight_ssim')
     return parser.parse_args()
         
 if __name__ == '__main__':  
@@ -460,7 +467,7 @@ if __name__ == '__main__':
                            reduce_factor=.8,
                            count_start=((args.epoch_start,args.batchind_start)),
                            p='fro',
-                           weight_ssim=.9,
+                           weight_ssim=args.weight_ssim,
                            ngpu=args.ngpu,
                            dir_checkpoint=dir_checkpoint,
                            dir_hist=args.histpath,

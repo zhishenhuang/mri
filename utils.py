@@ -229,7 +229,7 @@ def shiftsamp(sparsity,imgHeg):
         quota    = int(imgHeg*sparsity)
     else:
         quota    = int(sparsity)
-    maskInd  = np.concatenate((np.arange(0,quota//2 ),np.arange(imgHeg-1,imgHeg-1-quota//2-quota%2,-1)))
+    maskInd  = np.concatenate((np.arange(0,quota//2),np.arange(imgHeg-1,imgHeg-1-quota//2-quota%2,-1)))
     erasInd  = np.setdiff1d(np.arange(imgHeg),maskInd)
     mask     = torch.ones(imgHeg)
     mask[erasInd] = 0
@@ -270,8 +270,29 @@ def mask_naiveRand(imgHeg,fix=10,other=30,roll=False):
     if not roll:
         return mask,maskInd,erasInd
     else:
-        mask = torch.fft.fftshift(mask)
+        mask = F.fftshift(mask)
         return mask,None,None
+    
+def mask_equidist(imgHeg,fix=10,other=30,roll=False):
+    '''
+    return an equi-distance mask
+    '''
+    fix = int(fix)
+    other = int(other)
+    _, fixInds, _ = shiftsamp(fix,imgHeg)
+    IndsLeft = np.setdiff1d(np.arange(imgHeg),fixInds)
+    sampinds = np.linspace(0,imgHeg-fix-1,other).astype(int)
+    equiInds = IndsLeft[sampinds]
+    maskInds = np.concatenate((fixInds,equiInds))
+    erasInds = np.setdiff1d(np.arange(imgHeg),maskInds)
+    mask     = torch.ones(imgHeg)
+    mask[erasInds] = 0
+    if not roll:
+        return mask
+    else:
+        mask = F.fftshift(mask)
+        return mask
+    
 
 def mask_makebinary(M,beta=1,threshold=0.5,sigma=True,device='cpu'): # done for gpu
     '''
@@ -456,11 +477,10 @@ def compute_l1err(x,xstar):
 
 def compute_hfen(recon: torch.Tensor,gt: torch.Tensor) -> np.ndarray:
     if type(recon) is torch.Tensor:
-        gt    = gt.to(torch.cfloat)
+        gt    = gt.to(torch.cfloat).cpu()
     if type(gt) is torch.Tensor:
-        recon = recon.to(torch.cfloat)
-    recon = recon.cpu()
-    gt    = gt.cpu()
+        recon = recon.to(torch.cfloat).cpu()
+
     LoG_GT    = ndimage.gaussian_laplace(np.real(gt), sigma=1)    + 1j*ndimage.gaussian_laplace(np.imag(gt), sigma=1)
     LoG_recon = ndimage.gaussian_laplace(np.real(recon), sigma=1) + 1j*ndimage.gaussian_laplace(np.imag(recon), sigma=1)
     return np.linalg.norm(LoG_recon - LoG_GT)/np.linalg.norm(LoG_GT)
@@ -599,3 +619,188 @@ def ssim_uniform(input, target, window_size=11, reduction='mean'):
 #         y_high     = y[base//2:Heg-1-base//2-base%2,:]
 #         ystar_high = ystar[base//2:Heg-1-base//2-base%2,:]
 #         return torch.norm(y_high - ystar_high,'fro')/torch.norm(ystar_high,'fro')
+
+
+def loupe_eval(loupe,testdata,preselect_num,sparsity,\
+               batchsize=5,mode='unet',\
+               Lambda=1e-4):
+    loupe.eval()
+    if preselect_num > 0:
+        assert loupe.preselect
+        assert loupe.preselect_num == preselect_num
+    # prepare test data for mnet input
+    nimgs = testdata.shape[0]; heg = testdata.shape[1]; wid = testdata.shape[2]    
+    data = torch.reshape(testdata,(nimgs,1,heg,wid))
+    
+    pred_loupe = torch.zeros((nimgs,heg,wid)) 
+    batchnums = int(np.ceil(nimgs/batchsize))
+    batchind = 0    
+    if mode == 'unet':           
+        while batchind < batchnums:
+            batch     = np.arange(batchsize*batchind, min(batchsize*(batchind+1),nimgs))
+            databatch = data[batch]
+            preds,_   = loupe(databatch)
+            pred_loupe[batch] = torch.squeeze( preds.detach() )
+            batchind += 1
+    elif mode == 'sigpy':
+        masks_loupe = torch.zeros((batchnums,heg))
+        while batchind < batchnums:
+            batch = np.arange(batchsize*batchind, min(batchsize*(batchind+1),nimgs))
+            databatch = data[batch]
+            _,mask = loupe.samplers[0](databatch,sparsity)
+
+            mask = torch.squeeze(mask.detach())
+            masks_loupe[batchind,:] = mask
+            observed_kspace = torch.zeros_like(databatch)
+            imgs_recon = torch.zeros((len(databatch),heg,wid))
+            observed_kspace[:,:,mask==1,:] = databatch[:,:,mask==1,:]
+            
+            mps = np.ones((1,heg,wid))
+            for ind in range(len(observed_kspace)):
+                y_tmp = observed_kspace[ind,0,:,:].view(-1,heg,wid).numpy()
+                imgs_recon[ind,:,:] = torch.tensor(\
+                           np.fft.ifftshift(np.abs(TotalVariationRecon(y_tmp, mps, Lambda,show_pbar=False).run())) )
+            pred_loupe[batch] = imgs_recon
+            batchind += 1
+        
+    ssim = compute_ssim(pred_loupe,testdata)
+    psnr = compute_psnr(pred_loupe,testdata)
+    hfen = np.zeros((nimgs))
+    for ind in range(nimgs):
+        hfen[ind] = compute_hfen(pred_loupe[ind,:,:].to(torch.cfloat),testdata[ind,:,:].to(torch.cfloat))
+    rmse = np.zeros((nimgs))
+    for ind in range(nimgs):
+        rmse[ind] = torch.norm(pred_loupe[ind,:,:] - testdata[ind,:,:],2)/torch.norm(testdata[ind,:,:],2)
+    
+    return ssim,psnr,hfen,rmse
+
+# def mnet_eval(mnet,unet,testdata,preselect_num,sparsity,\
+#              batchsize=5,mode='unet',\
+#              Lambda=1e-4,\
+#              normalize=False):
+    
+#     # prepare test data for mnet input
+#     nimgs = testdata.shape[0]; heg = testdata.shape[1]; wid = testdata.shape[2]
+    
+#     data = torch.zeros(nimgs,2,heg,wid)    
+#     lf_mask = mask_naiveRand(heg,fix=preselect_num,other=0,roll=False)
+#     data[:,0,lf_mask==1,:] = torch.real(testdata[:,lf_mask==1,:])
+#     data[:,1,lf_mask==1,:] = torch.imag(testdata[:,lf_mask==1,:])
+    
+#     pred_mnet = torch.zeros((nimgs,heg))
+#     batchnums = int(np.ceil(nimgs/batchsize))
+#     batchind = 0
+#     while batchind < batchnums:
+#         batch = np.arange(batchsize*batchind, min(batchsize*(batchind+1),nimgs))
+#         databatch = data[batch]
+#         preds = mnet_wrapper(mnet,databatch,budget=int(heg*sparsity)-preselect_num,\
+#                              imgshape=[heg,wid],normalize=True,detach=True)
+#         pred_mnet[batch] = F.ifftshift(preds,dim=1)
+#         batchind += 1
+    
+#     observed_kspace = torch.zeros_like(testdata)
+#     for ind in range(len(data)):
+#         observed_kspace[ind,pred_mnet[ind,:]==1,:] = testdata[ind,pred_mnet[ind,:]==1,:]
+#     imgs_recon = torch.zeros(testdata.shape)
+    
+#     if mode == 'unet':
+#         input_unet = F.ifftn(observed_kspace,dim=(1,2),norm='ortho').abs().view(nimgs,1,heg,wid)
+#         batchind = 0
+#         while batchind < batchnums:
+#             batch = np.arange(batchsize*batchind, min(batchsize*(batchind+1),nimgs))
+#             databatch = input_unet[batch]
+#             if not normalize:
+#                 imgs_recon[batch] = torch.squeeze(unet(databatch).detach())
+#             else:
+#                 recon_batch = unet(databatch).detach()
+#                 for ind in range(len(recon_batch)):
+#                     recon_batch[ind] = recon_batch[ind]/torch.max(torch.abs(torch.flatten(recon_batch[ind])))
+#                 imgs_recon[batch] = torch.squeeze(recon_batch)
+#             batchind += 1
+#     elif mode == 'sigpy':
+#         mps = np.ones((1,heg,wid))
+#         for ind in range(len(observed_kspace)):
+#             y_tmp = observed_kspace[ind,:,:].view(-1,heg,wid).numpy()
+#             imgs_recon[ind,:,:] = torch.tensor(\
+#                        np.fft.ifftshift(np.abs(TotalVariationRecon(y_tmp, mps, Lambda,show_pbar=False).run())) )
+
+#     ssim = compute_ssim(imgs_recon,testdata)
+#     psnr = compute_psnr(imgs_recon,testdata)
+#     hfen = np.zeros((nimgs))
+#     for ind in range(nimgs):
+#         hfen[ind] = compute_hfen(imgs_recon[ind,:,:].to(torch.cfloat),testdata[ind,:,:].to(torch.cfloat))
+#     rmse = np.zeros((nimgs))
+#     for ind in range(nimgs):
+#         rmse[ind] = torch.norm(imgs_recon[ind,:,:] - testdata[ind,:,:],2)/torch.norm(testdata[ind,:,:],2)
+    
+#     return ssim,psnr,hfen,rmse
+
+# load data and eval
+def mnet_eval(testdata,mnet,model,budget,batchsize=25,device=torch.device('cpu')):
+    mnet.to(device)
+    model.to(device)
+    for ind in range(testdata.shape[0]):
+        testdata[ind,:,:] = testdata[ind,:,:]/torch.max(testdata[ind,:,:])
+    print('test data size:', testdata.shape)
+    batch_nums  = int(np.ceil(testdata.shape[0]/batchsize))
+    lowfreqmask = mask_naiveRand(testdata.shape[1],fix=testdata.shape[1]-budget,other=0,roll=True)[0].to(device)
+    
+    l1err = torch.zeros(testdata.shape[0])
+    l2err = torch.zeros(testdata.shape[0])
+    hfens = torch.zeros(testdata.shape[0])
+    ssims = torch.zeros(testdata.shape[0])
+    psnrs = torch.zeros(testdata.shape[0])
+    
+    batchind = 0
+    with torch.no_grad():
+        while batchind<batch_nums:
+            batch = torch.arange(batchsize*batchind, min(batchsize*(batchind+1),testdata.shape[0]))
+            xstar = testdata[batch,:,:].to(torch.float).to(device)
+            yfull = F.fftshift(F.fftn(xstar,dim=(1,2),norm='ortho'),dim=(1,2)) # y is ROLLED!
+
+            y = torch.zeros((yfull.shape[0],2,yfull.shape[1],yfull.shape[2]),dtype=torch.float,device=device)
+            y[:,0,lowfreqmask==1,:] = torch.real(yfull)[:,lowfreqmask==1,:]
+            y[:,1,lowfreqmask==1,:] = torch.imag(yfull)[:,lowfreqmask==1,:]
+            mask_test = mnet_wrapper(mnet,y,budget,(testdata.shape[1],testdata.shape[2]),\
+                                     normalize=True,detach=True,device=device)
+
+            z = torch.zeros(xstar.shape,device=device).to(torch.cfloat)
+            for ind in range(len(xstar)):
+                z[ind,mask_test[ind,:]==1,:] = y[ind,0,mask_test[ind,:]==1,:] + 1j*y[ind,1,mask_test[ind,:]==1,:]
+            z = F.ifftshift(z , dim=(1,2)) 
+            mask_test = F.ifftshift(mask_test,dim=(1))
+            model_in_chans = model.in_chans if model.__class__.__name__=='Unet' else model.model.in_chans
+            if model_in_chans == 1:
+                x_ifft = torch.abs( F.ifftn(z,dim=(1,2),norm='ortho') )
+                x_in   = x_ifft.view(len(xstar),1,testdata.shape[1],testdata.shape[2])
+            elif model_in_chans == 2:
+                x_ifft = F.ifftn(z,dim=(1,2),norm='ortho') 
+                x_in   = torch.zeros((len(xstar),2,testdata.shape[1],testdata.shape[2]),device=device)
+                x_in[:,0,:,:] = torch.real(x_ifft)
+                x_in[:,1,:,:] = torch.imag(x_ifft)
+            
+            if model.__class__.__name__ == 'Unet':
+                x = torch.squeeze(model(x_in).detach())
+            elif model.__class__.__name__ == 'MoDL':
+                if len(mask_test.shape) == 2: # input mask is in the format of NH
+                    mask_test_in = copy.deepcopy(mask_test)
+                    mask_test    = torch.zeros(mask_test.shape[0],x_in.shape[2],x_in.shape[3],device=device)
+                    for ind in range(len(mask_test)):
+                        mask_tmp = mask_test_in[ind].unsqueeze(1).repeat(1,x_in.shape[3])
+                        mask_test[ind] = mask_tmp
+                    mask_test = mask_test.unsqueeze(1).repeat(1,2,1,1)
+                    smap = torch.ones(x_in.shape,device=device).unsqueeze(1)
+                x = model(x_in,mask=mask_test,smap=smap).detach()[:,0,:,:]
+
+            # to implement various criteria
+            l1err[batch] = compute_l1err(x,xstar)
+            l2err[batch] = compute_l2err(x,xstar)
+            hfens[batch] = torch.tensor(compute_hfen(x,xstar))
+            ssims[batch] = ssim_uniform(torch.unsqueeze(x,1),torch.unsqueeze(xstar,1),reduction='mean').cpu().item()
+    #         ssims[batch] = torch.tensor(compute_ssim(x,xstar))
+            psnrs[batch] = torch.tensor(compute_psnr(x,xstar))
+
+            batchind += 1
+    return l1err,l2err,hfens,ssims,psnrs
+
+# print eval result
