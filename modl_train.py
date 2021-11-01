@@ -14,10 +14,10 @@ from utils import *
 from unet.unet_model import UNet
 from unet.unet_model_fbr import Unet
 from unet.unet_model_banding_removal_fbr import UnetModel
-from mnet import MNet
+from mnet.mnet_v2 import MNet
 from MoDL.MoDL import MoDL, MoDL_trainer
 import copy
-dir_checkpoint = '/mnt/shared_a/checkpoints/leo/recon/'
+dir_checkpoint = '/mnt/DataA/checkpoints/leo/recon/'
 
 def mnet_getinput(mnet,data,base=8,budget=32,batchsize=10,unet_channels=1,return_mask=False,device=torch.device('cpu')):
     '''
@@ -98,8 +98,8 @@ def rand_getinput(data,base=8,budget=32,batchsize=5,net_inchans=2,datatype=torch
 
 def prepare_data(mode='mnet',mnet=None, base=8, budget=32,batchsize=5,unet_inchans=2,datatype=torch.float,device=torch.device('cpu')):
     if mode == 'mnet':
-        train_full = torch.tensor(np.load('/mnt/shared_a/fastMRI/knee_singlecoil_train.npz')['data'],dtype=datatype)
-        val_full   = torch.tensor(np.load('/mnt/shared_a/fastMRI/knee_singlecoil_val.npz')['data'],  dtype=datatype)
+        train_full = torch.tensor(np.load('/mnt/DataB/fastMRI/knee_singlecoil_train.npz')['data'],dtype=datatype)
+        val_full   = torch.tensor(np.load('/mnt/DataB/fastMRI/knee_singlecoil_val.npz')['data'],  dtype=datatype)
 
         for ind in range(train_full.shape[0]):
             train_full[ind,:,:] = train_full[ind,:,:]/train_full[ind,:,:].abs().max()
@@ -126,10 +126,10 @@ def prepare_data(mode='mnet',mnet=None, base=8, budget=32,batchsize=5,unet_incha
         
     if mode == 'rand':
         ## train a unet to reconstruct images from random mask
-        train_full = torch.tensor(np.load('/home/huangz78/data/traindata_x.npz')['xfull'],dtype=datatype)
-        val_full   = torch.tensor(np.load('/home/huangz78/data/testdata_x.npz')['xfull'], dtype=datatype)         
-#         train_full = torch.tensor(np.load('/mnt/shared_a/data/fastMRI/knee_singlecoil_train.npz')['data'],dtype=datatype)
-#         val_full   = torch.tensor(np.load('/mnt/shared_a/data/fastMRI/knee_singlecoil_val.npz')['data']  ,dtype=datatype)
+#         train_full = torch.tensor(np.load('/home/huangz78/data/traindata_x.npz')['xfull'],dtype=datatype)
+#         val_full   = torch.tensor(np.load('/home/huangz78/data/testdata_x.npz')['xfull'], dtype=datatype)         
+        train_full = torch.tensor(np.load('/mnt/DataB/fastMRI/knee_singlecoil_train.npz')['data'],dtype=datatype)
+        val_full   = torch.tensor(np.load('/mnt/DataB/fastMRI/knee_singlecoil_val.npz')['data']  ,dtype=datatype)
         for ind in range(train_full.shape[0]):
             train_full[ind,:,:] = train_full[ind,:,:]/train_full[ind,:,:].abs().max()
         for ind in range(val_full.shape[0]):
@@ -180,9 +180,9 @@ def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)   
     
-    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=10,
+    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=40,
                         help='Number of epochs', dest='epochs')
-    parser.add_argument('-b', '--batch-size', metavar='B', type=int, nargs='?', default=5,
+    parser.add_argument('-b', '--batch-size', metavar='B', type=int, nargs='?', default=8,
                         help='Batch size', dest='batchsize')
     parser.add_argument('-tb', '--val-batch-size', metavar='TB', type=int, nargs='?', default=5,
                         help='valbatch size', dest='val_batchsize')
@@ -197,7 +197,7 @@ def get_args():
     parser.add_argument('-lrwd', '--lr-weight-decay', metavar='LRWD', type=float, nargs='?', default=0,
                         help='Learning rate weight decay', dest='lrwd')
     
-    parser.add_argument('-m','--mode',metavar='M',type=str,nargs='?',default='rand',
+    parser.add_argument('-m','--mode',metavar='M',type=str,nargs='?',default='mnet',
                         help='training mode', dest='mode')
     
     parser.add_argument('-utype', '--unet-type', type=int, default=2,
@@ -209,16 +209,22 @@ def get_args():
                         help='number of input channel of unet', dest='in_chans')
     parser.add_argument('-s','--skip',type=str,default='False',
                         help='residual network application', dest='skip')
+    parser.add_argument('-cgs','--cg-steps',type=int,default=6,
+                        help='number of CG steps in MoDL model', dest='cg_steps')
+    parser.add_argument('-wssim', '--weight-ssim', metavar='WS', type=float, nargs='?', default=5,
+                        help='weight of SSIM loss in training', dest='weight_ssim')
     
-    parser.add_argument('-bs','--base-size',metavar='BS',type=int,nargs='?',default=8,
+    parser.add_argument('-bs','--base-size',metavar='BS',type=int,nargs='?',default=16,
                         help='number of observed low frequencies', dest='base_freq')
-    parser.add_argument('-bg','--budget',metavar='BG',type=int,nargs='?',default=32,
+    parser.add_argument('-bg','--budget',metavar='BG',type=int,nargs='?',default=64,
                         help='number of high frequencies to sample', dest='budget')
     
-    parser.add_argument('-mp', '--mnet-path', type=str, default='/mnt/shared_a/checkpoints/leo/mri/mnet_split_trained_cf_8_bg_32_unet_in_chan_1_epoch_9.pt',
+    parser.add_argument('-mp', '--mnet-path', type=str, default='/mnt/DataA/checkpoints/leo/mri/mnet_v2_split_trained_cf_16_bg_64_unet_in_chan_1_epoch9.pt',
                         help='path file for a mnet', dest='mnetpath')
     parser.add_argument('-up', '--unet-path', type=str, default=None,
                         help='path file for a unet', dest='unetpath')
+    parser.add_argument('-mdp', '--modl-path', type=str, default=None,
+                        help='path file for a modl model', dest='modlpath')
     parser.add_argument('-hp', '--history-path', type=str, default=None,
                         help='path file for npz file recording training history', dest='histpath')
     parser.add_argument('-ngpu', '--num-gpu', type=int, default=1,
@@ -241,15 +247,20 @@ if __name__ == '__main__':
     elif args.skip == 'True':
         args.skip = True
     device = torch.device("cuda:0" if (torch.cuda.is_available() and args.ngpu > 0) else "cpu")
-    unetpath = args.unetpath if args.unetpath is not None else None
+#     unetpath = args.unetpath if args.unetpath is not None else None
     
-    modl = MoDL(in_chans=args.in_chans,out_chans=2,chans=args.chans,num_pool_layers=4,drop_prob=0,unet_path=unetpath).to(device)
-   
+    modl = MoDL(in_chans=args.in_chans,out_chans=2,chans=args.chans,\
+                num_pool_layers=4,drop_prob=0,unet_path=None,CG_steps=args.cg_steps).to(device)
+    if args.modlpath is not None:
+        checkpoint = torch.load(args.modlpath)
+        modl.load_state_dict(checkpoint['model_state_dict'])
+        print(f'MoDL model is loaded successfully from: {args.modlpath}')
+
     if args.mnetpath is not None:
-        mnet = MNet(beta=1,in_channels=2,out_size=320-args.base_freq, imgsize=(320,320),poolk=3)
+        mnet = MNet(beta=1,in_chans=2,out_size=320-args.base_freq, imgsize=(320,320),poolk=3)
         checkpoint = torch.load(args.mnetpath)
         mnet.load_state_dict(checkpoint['model_state_dict'])
-        print('MNet loaded successfully from: ' + args.mnetpath)
+        print(f'MNet is loaded successfully from: {args.mnetpath}')
         mnet.eval()
     else:
         mnet = None
@@ -267,14 +278,13 @@ if __name__ == '__main__':
 #                            min_lr=1e-6,
 #                            reduce_factor=.8,
                            count_start=(args.epoch_start,args.batchind_start),
-#                            p='fro',
-#                            weight_ssim=.9,
+                           p='fro',
+                           weight_ssim=args.weight_ssim,
                            ngpu=args.ngpu,                       
                            hist_dir=args.histpath,
                            batchsize=args.batchsize,
                            valbatchsize=args.val_batchsize,
-                           epochs=args.epochs,
-                           weight_ssim=10,
+                           epochs=args.epochs,                           
                            mnetpath=args.mnetpath)
     
     trainer.run(train_in,train_label,train_mask, val_in,val_label, val_mask, save_cp=True)

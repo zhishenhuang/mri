@@ -30,7 +30,7 @@ class MoDL(nn.Module):
                  CG_L: float = 1.,
     ):
         super(MoDL, self).__init__()
-        self.model    = Unet(in_chans=in_chans,out_chans=out_chans,num_pool_layers=num_pool_layers,drop_prob=drop_prob)
+        self.model = Unet(in_chans=in_chans,out_chans=out_chans,num_pool_layers=num_pool_layers,drop_prob=drop_prob,chans=chans)
         self.CG_steps = CG_steps
         self.CG_tol   = CG_tol
         self.CG_L     = CG_L
@@ -63,7 +63,8 @@ class MoDL_trainer:
                  batchsize=3, 
                  valbatchsize=5,
                  count_start=(0,0),
-                 weight_ssim=.7,
+                 weight_ssim=5,
+                 p='fro',
                  ngpu=0,
                  hist_dir:str=None,
                  mnetpath:str=None): 
@@ -77,9 +78,10 @@ class MoDL_trainer:
         self.batchsize = batchsize
         self.valbatchsize = valbatchsize
         self.count_start = count_start
-        self.weight_ssim = 5
+        self.weight_ssim = weight_ssim 
         self.device = torch.device('cuda:0') if ((torch.cuda.is_available()) and (ngpu>0)) else torch.device('cpu')
         self.mnetpath = mnetpath
+        self.p = p
         if hist_dir is None:          
             self.train_loss_epoch = []
             self.train_loss       = []
@@ -97,6 +99,7 @@ class MoDL_trainer:
             self.val_loss         = list(histRec[valloss_epoch])
             self.val_ssim         = list(histRec[val_ssim])
             self.val_lp           = list(histRec[val_lp])
+            print(f'Training history is loaded successfully from : {hist_dir}')
     def empty_cache(self):
         torch.cuda.empty_cache()
         torch.backends.cuda.cufft_plan_cache.clear()
@@ -134,7 +137,7 @@ class MoDL_trainer:
                 
                 MoDL_res = self.model(databatch,smap,maskbatch)
                 
-                loss_lp   += lpnorm(MoDL_res[:,0:1,:,:], labelbatch, mode='mean')
+                loss_lp   += lpnorm(MoDL_res[:,0:1,:,:], labelbatch, mode='mean',p=self.p)
                 loss_ssim += (-ssim_uniform(MoDL_res[:,0:1,:,:],labelbatch))
 #                 loss      += loss_lp + self.weight_ssim * loss_ssim
                 batchind += 1 
@@ -188,7 +191,7 @@ class MoDL_trainer:
 
                     optimizer.zero_grad()
 
-                    loss_lp   = lpnorm(MoDL_out, label, mode='no_normalization')
+                    loss_lp   = lpnorm(MoDL_out, label, mode='no_normalization',p=self.p)
                     loss_ssim = -ssim_uniform(MoDL_out,label)
                     loss = loss_lp + self.weight_ssim * loss_ssim
                     loss.backward()
@@ -197,7 +200,7 @@ class MoDL_trainer:
                     self.train_loss.append(loss.item())
                     self.train_ssim.append(-loss_ssim.item())
                     with torch.no_grad():
-                        l2loss_batch = lpnorm(MoDL_out[:,0:1,:,:],labelbatch,mode='mean')
+                        l2loss_batch = lpnorm(MoDL_out[:,0:1,:,:],labelbatch,mode='mean',p=self.p)
                     self.train_lp.append(l2loss_batch.item())                
                     print(f'[{global_step}][{epoch+1}/{self.epochs}][{batchind+1}/{batchnums}] loss/train: {loss.item():.4f}, l2loss: {l2loss_batch.item():.4f}, ssim: {-loss_ssim.item():.4f}')
                     global_step += 1

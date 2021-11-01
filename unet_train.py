@@ -10,12 +10,12 @@ import torch.nn as nn
 import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from utils import *
-sys.path.insert(0,'/home/huangz78/mri/unet/')
+
 # import unet_model
 from unet.unet_model import UNet
 from unet.unet_model_fbr import Unet
 from unet.unet_model_banding_removal_fbr import UnetModel
-from mnet import MNet
+from mnet.mnet_v2 import MNet
 import copy
 dir_checkpoint = '/mnt/shared_a/checkpoints/leo/recon/'
 
@@ -259,7 +259,7 @@ class unet_trainer:
                 ssim_loss          += -ssim_uniform(pred,vallabel,reduction='mean')                        
             df_loss_epoch   = data_fidelity_loss.item()/n_val
             ssim_loss_epoch = ssim_loss.item()/val_batchnums
-            valloss_epoch   = df_loss_epoch  + ssim_loss_epoch
+            valloss_epoch   = df_loss_epoch  + self.weight_ssim * ssim_loss_epoch
             
             self.val_df_loss.append(df_loss_epoch)
             self.val_ssim_loss.append(ssim_loss_epoch)
@@ -325,7 +325,7 @@ class unet_trainer:
                     
                     data_fidelity_loss = lpnorm(pred,labelbatch,p=self.p,mode='mean')
                     ssim_loss = -ssim_uniform(pred,labelbatch,reduction='mean')
-                    loss = (1-self.weight_ssim) * data_fidelity_loss  + self.weight_ssim * ssim_loss
+                    loss = data_fidelity_loss  + self.weight_ssim * ssim_loss
                     
                     self.train_df_loss.append(data_fidelity_loss.item())
                     self.train_ssim_loss.append(ssim_loss.item())
@@ -362,9 +362,9 @@ def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)   
     
-    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=30,
+    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=40,
                         help='Number of epochs', dest='epochs')
-    parser.add_argument('-b', '--batch-size', metavar='B', type=int, nargs='?', default=5,
+    parser.add_argument('-b', '--batch-size', metavar='B', type=int, nargs='?', default=10,
                         help='Batch size', dest='batchsize')
     parser.add_argument('-tb', '--val-batch-size', metavar='TB', type=int, nargs='?', default=5,
                         help='valbatch size', dest='val_batchsize')
@@ -385,7 +385,7 @@ def get_args():
     parser.add_argument('-utype', '--unet-type', type=int, default=2,
                         help='type of unet', dest='utype')
     
-    parser.add_argument('-cn', '--channel-num', metavar='CN', type=int, nargs='?', default=128,
+    parser.add_argument('-cn', '--channel-num', metavar='CN', type=int, nargs='?', default=64,
                         help='channel number of unet', dest='chans')
     parser.add_argument('-uc', '--uchan-in', metavar='UC', type=int, nargs='?', default=2,
                         help='number of input channel of unet', dest='in_chans')
@@ -397,7 +397,7 @@ def get_args():
     parser.add_argument('-bg','--budget',metavar='BG',type=int,nargs='?',default=32,
                         help='number of high frequencies to sample', dest='budget')
     
-    parser.add_argument('-mp', '--mnet-path', type=str, default='/mnt/shared_a/checkpoints/leo/mri/mnet_split_trained_cf_8_bg_32_unet_in_chan_1_epoch_9.pt',
+    parser.add_argument('-mp', '--mnet-path', type=str, default='/mnt/shared_a/checkpoints/leo/mri/mnet_v2_split_trained_cf_8_bg_32_unet_in_chan_1_epoch9.pt',
                         help='path file for a mnet', dest='mnetpath')
     parser.add_argument('-up', '--unet-path', type=str, default=None,
                         help='path file for a unet', dest='unetpath')
@@ -408,7 +408,7 @@ def get_args():
     
     parser.add_argument('-sd', '--seed', type=int, default=0,
                         help='random seed', dest='seed')
-    parser.add_argument('-wssim', '--weight-ssim', metavar='WS', type=float, nargs='?', default=.9,
+    parser.add_argument('-wssim', '--weight-ssim', metavar='WS', type=float, nargs='?', default=5,
                         help='weight of SSIM loss in training', dest='weight_ssim')
     return parser.parse_args()
         
@@ -445,7 +445,7 @@ if __name__ == '__main__':
     unet.train()        
     
     if args.mnetpath is not None:
-        mnet = MNet(beta=1,in_channels=2,out_size=320-args.base_freq, imgsize=(320,320),poolk=3)
+        mnet = MNet(beta=1,in_chans=2,out_size=320-args.base_freq, imgsize=(320,320),poolk=3)
         checkpoint = torch.load(args.mnetpath)
         mnet.load_state_dict(checkpoint['model_state_dict'])
         print('MNet loaded successfully from: ' + args.mnetpath)
