@@ -45,14 +45,16 @@ class loupe_trainer:
                         preselect_num:int=24,
                         lrm:float=1e-3,
                         lru:float=1e-4,
+                        weight_ssim:float=.7,
                         weight_decay:float=0,
                         momentum:float=0,
                         epochs:int=1,
                         batchsize:int=5,
                         val_batchsize:int=5,
                         count_start:tuple=(0,0),
-                        dir_checkpoint:str='/mnt/shared_a/checkpoints/mri/',
-                        dir_hist:str=None):
+                        dir_checkpoint:str='/mnt/shared_a/checkpoints/leo/mri/',
+                        dir_hist:str=None,
+                        device=torch.device('cpu')):
         self.model = model
         self.slope = slope
         self.sparsity = sparsity
@@ -60,6 +62,7 @@ class loupe_trainer:
         self.preselect_num = preselect_num
         self.lrm = lrm
         self.lru = lru
+        self.weight_ssim = weight_ssim
         self.weight_decay = weight_decay
         self.momentum = momentum
         self.epochs = epochs
@@ -68,39 +71,52 @@ class loupe_trainer:
         self.epoch_start = count_start[0]
         self.batchind_start = count_start[1]
         self.dir_checkpoint = dir_checkpoint
-        
-        
-        if histpath is None:
-            self.train_loss = []; self.l2_val = []; self.ssim_val = []
+        self.device = device
+        self.acceler_fold = int(1./sparsity)
+        if dir_hist is None:
+            self.loss_train = []; self.l2_train = []; self.ssim_train = []
+            self.loss_val   = []; self.l2_val   = []; self.ssim_val   = []
         else:
-            histRec         = np.load(histpath)
-            self.train_loss = list(histRec['loss_train'])
+            histRec         = np.load(dir_hist)
+            self.loss_train = list(histRec['loss_train'])
+            self.l2_train   = list(histRec['l2_train'])
+            self.ssim_train = list(histRec['ssim_train'])
             self.l2_val     = list(histRec['l2_val'])
             self.ssim_val   = list(histRec['ssim_val'])
-            print('training history file successfully loaded from the path: ', histpath)
+            self.loss_val   = list(histRec['loss_val'])
+            print('training history file successfully loaded from the path: ', dir_hist)
+    def empty_cache(self):
+        torch.cuda.empty_cache()
+        torch.backends.cuda.cufft_plan_cache.clear()
         
-    def validate(self, valdata):
+    def validate(self, valdata,epoch=0):
         valbatchind = 0
-        valbatch_nums = int(np.ceil(valdata.shape[0]/self.val_batchsize))
+        n_val = valdata.shape[0]
+        val_batchnums = int(np.ceil(n_val/self.val_batchsize))
         self.model.eval()
-        criterion = nn.MSELoss()
         l2loss = 0
         ssim   = 0
+        valloss = 0
+        with torch.no_grad():
+            while (valbatchind < val_batchnums):
+                batch = np.arange(self.val_batchsize*valbatchind, min(self.val_batchsize*(valbatchind+1),n_val))
+                databatch = normalize_data(valdata[batch,:,:]) if len(batch)>1 else normalize_data(valdata[batch,:,:].unsqueeze(0))
+                xstar = databatch.unsqueeze(1).to(device)
+                ystar = F.fftn(xstar,dim=(2,3),norm='ortho')
+                x_recon,_ = self.model(ystar)
+                x_recon   = x_recon.detach()
+                l2loss += lpnorm(x_recon,xstar,p='fro',mode='sum')
+                ssim   += ssim_uniform(x_recon,xstar,reduction='mean')
+                valbatchind += 1
         
-        while (valbatchind < valbatch_nums):
-            batch = np.arange(batchsize_val*valbatchind, min(batchsize_val*(valbatchind+1),valdata.shape[0]))
-            databatch = normalize_data(valdata[batch,:,:]) if len(batch)>1 else normalize_data(valdata[batch,:,:].unsqueeze(0))
-            xstar = databatch.unsqueeze(1)
-            ystar = F.fftn(xstar,dim=(2,3),norm='ortho')
-            x_recon,_ = self.model(ystar)
-            x_recon   = x_recon.detach()
-            l2loss += criterion(x_recon,xstar)
-            ssim   += ssim_uniform(x_recon,xstar)
-            valbatchind += 1
-        progress_str = f'[{epoch+1}/{epochs}]'
-        print('\n' + progress_str + f' L2 loss/VAL: {l2loss.item()/valbatch_nums}, SSIM/VAL: {ssim.item()/valbatch_nums}')
-        self.l2_val.append(l2loss.item()/valbatch_nums)
-        self.ssim_val.append(ssim.item()/valbatch_nums)
+        df_loss_epoch   = l2loss.item()/n_val
+        ssim_loss_epoch = -ssim.item()/val_batchnums
+        valloss_epoch   = df_loss_epoch  + self.weight_ssim * ssim_loss_epoch
+        progress_str = f'[{epoch+1}/{self.epochs}]'
+        print('\n' + progress_str + f' L2 loss/VAL: {df_loss_epoch}, SSIM/VAL: {-ssim_loss_epoch}, loss/VAL: {valloss_epoch}')
+        self.l2_val.append(df_loss_epoch)
+        self.ssim_val.append(-ssim_loss_epoch)
+        self.loss_val.append(valloss_epoch)               
     
     def save(self,epoch=0):
         try:
@@ -108,9 +124,9 @@ class loupe_trainer:
             print('Created checkpoint directory')
         except OSError:
             pass
-        info_str = f'spar_{sparsity}_base_{preselect_num}'
-        torch.save({'model_state_dict': self.model.state_dict()}, self.dir_checkpoint + f'loupe_{info_str}_epoch_{epoch}.pt')
-        np.savez(self.dir_checkpoint + f'loupe_{info_str}_epoch_{epoch}_history.npz', loss_train=self.train_loss, l2_val=self.l2_val,ssim_val=self.ssim_val)
+        torch.save({'model_state_dict': self.model.state_dict()}, self.dir_checkpoint + f'loupe_{self.acceler_fold}fold_base_{self.preselect_num}_epoch_{epoch}.pt')
+        histfilename = self.dir_checkpoint + f'loupe_{self.acceler_fold}fold_base_{self.preselect_num}_epoch_{epoch}_history.npz'
+        np.savez(histfilename, loss_train=self.loss_train, l2_train=self.l2_train,ssim_train=self.ssim_train, l2_val=self.l2_val,ssim_val=self.ssim_val,loss_val=self.loss_val)
         print(f'\t Checkpoint for Loupe saved after epoch {epoch + 1}!' + '\n')
         
     def run(self, traindata, valdata, save_cp=False):
@@ -120,9 +136,8 @@ class loupe_trainer:
         shape   = traindata.shape[1:3]
         batch_nums  = int(np.ceil(traindata.shape[0]/self.batchsize))
         optimizer = optim.RMSprop([{'params': loupe.samplers.parameters()},
-                                   {'params': loupe.unet.parameters(),'lr':lru}
-                                  ], lr=lrm, weight_decay=weight_decay,eps=1e-10)
-        criterion = nn.MSELoss()
+                                   {'params': loupe.unet.parameters(),'lr':self.lru}
+                                  ], lr=self.lrm, weight_decay=self.weight_decay,eps=1e-10)
         epoch = self.epoch_start 
         batchind = self.batchind_start
         try:
@@ -131,22 +146,26 @@ class loupe_trainer:
                     self.model.train()
                     batch = np.arange(self.batchsize*batchind, min(self.batchsize*(batchind+1),traindata.shape[0]))
                     databatch = normalize_data(traindata[batch,:,:]) if len(batch)>1 else normalize_data(traindata[batch,:,:].unsqueeze(0))
-                    xstar = traindata[batch,:,:].unsqueeze(1)
+                    xstar = databatch.unsqueeze(1).to(device)
                     ystar = F.fftn(xstar,dim=(2,3),norm='ortho')
                     x_recon,_ = self.model(ystar)
 
-                    loss_train = criterion(x_recon,xstar)
+                    l2loss     = lpnorm(x_recon,xstar,p='fro',mode='mean')
+                    ssimloss   = -ssim_uniform(x_recon,xstar,reduction='mean')
+                    loss_train = l2loss + self.weight_ssim * ssimloss
                     optimizer.zero_grad()
                     loss_train.backward()
                     optimizer.step()
-                    progress_str = f'[{epoch+1}/{epochs}][{min(batchsize_train*(batchind+1),traindata.shape[0])}/{traindata.shape[0]}]'
-                    print(progress_str + f' training loss: {loss_train.item()}')
-                    self.train_loss.append(loss_train.item())
+                    progress_str = f'[{epoch+1}/{self.epochs}][{min(self.batchsize*(batchind+1),traindata.shape[0])}/{traindata.shape[0]}]'
+                    print(progress_str + f' L2loss/train: {l2loss.item()}, SSIM/train: {-ssimloss.item()}, loss/train: {loss_train.item()}')
+                    self.l2_train.append(l2loss.item())
+                    self.ssim_train.append(-ssimloss.item())
+                    self.loss_train.append(loss_train.item())
                     batchind += 1   
 
                 # validation eval
-                self.validate(valdata)
-
+                self.validate(valdata,epoch=epoch)
+                self.empty_cache()
                 # saving models
                 if save_cp:
                     self.save(epoch=epoch)
@@ -164,26 +183,28 @@ class loupe_trainer:
 def get_args():
     parser = argparse.ArgumentParser(description='Train the Loupe model',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=20,
+    parser.add_argument('-e', '--epochs', metavar='E', type=int, default=40,
                         help='Number of epochs', dest='epochs')
-    parser.add_argument('-bt', '--batch-size-train', metavar='BT', type=int, nargs='?', default=5,
+    parser.add_argument('-bt', '--batch-size-train', metavar='BT', type=int, nargs='?', default=10,
                         help='Batch size train', dest='batchsize')
     parser.add_argument('-bv', '--batch-size-val', metavar='BV', type=int, nargs='?', default=5,
                         help='Batch size val', dest='val_batchsize')
     
-    parser.add_argument('-lrm', '--learning-rate-mask', metavar='LRM', type=float, nargs='?', default=1e-3,
+    parser.add_argument('-lrm', '--learning-rate-mask', metavar='LRM', type=float, nargs='?', default=1e-4,
                         help='Learning rate mask', dest='lrm')
-    parser.add_argument('-lru', '--learning-rate-unet', metavar='LRU', type=float, nargs='?', default=1e-4,
+    parser.add_argument('-lru', '--learning-rate-unet', metavar='LRU', type=float, nargs='?', default=1e-5,
                         help='Learning rate unet', dest='lru')
     
-    parser.add_argument('-skip', '--unet-skip', type=str, default='True',
+    parser.add_argument('-skip', '--unet-skip', type=str, default='False',
                         help='skip connections in structure of unet', dest='unet_skip')
-    parser.add_argument('-s', '--sparsity', type=float, default=.25,
+    parser.add_argument('-s', '--sparsity', type=float, default=.125,
                         help='sparsity', dest='sparsity')
-    parser.add_argument('-core', '--preselect-num', type=int, default=24,
+    parser.add_argument('-core', '--preselect-num', type=int, default=8,
                         help='preselected number of low frequencies', dest='preselect_num')
     parser.add_argument('-sl', '--slope', type=float, default=1,
                         help='slope used in the sigmoid function', dest='slope')
+    parser.add_argument('-wssim', '--weight-ssim', metavar='WS', type=float, nargs='?', default=0,
+                        help='weight of SSIM loss in training', dest='weight_ssim')
     
     parser.add_argument('-mp', '--model-path', type=str, default=None,
                         help='path file for a loupe model', dest='modelpath')
@@ -197,7 +218,9 @@ def get_args():
     
     parser.add_argument('-save', '--save-model', type=str, default='True',
                         help='whether to save model', dest='save_cp')
-
+    parser.add_argument('-ngpu','--number-gpu',metavar='NGPU',type=int,nargs='?',default=0,
+                        help='number of GPUs',dest='ngpu')
+    
     return parser.parse_args()
 
 
@@ -216,15 +239,16 @@ if __name__ == '__main__':
         args.save_cp = False
     
     ### loading data
-    traindata  = np.load('/mnt/shared_a/fastMRI/knee_singlecoil_train.npz')['data']
-    valdata    = np.load('/mnt/shared_a/fastMRI/knee_singlecoil_val.npz')['data']
+    traindata  = torch.tensor(np.load('/mnt/shared_a/fastMRI/knee_singlecoil_train.npz')['data'],dtype=torch.float)
+    valdata    = torch.tensor(np.load('/mnt/shared_a/fastMRI/knee_singlecoil_val.npz')['data'],dtype=torch.float)
     
     ### loading LOUPE model
     preselect  = True if args.preselect_num > 0 else False
-    
+    device = torch.device('cuda:0') if args.ngpu > 0 else torch.device('cpu')
     n_channels = 1
-    loupe = LOUPE(n_channels=n_channels,unet_skip=args.unet_skip,shape=shape,slope=args.slope,sparsity=args.sparsity,\
-                  preselect=preselect,preselect_num=args.preselect_num)
+    shape = [traindata.shape[1],traindata.shape[2]]
+    loupe = LOUPE(in_chans=n_channels,unet_skip=args.unet_skip,shape=shape,slope=args.slope,sparsity=args.sparsity,\
+                  preselect=preselect,preselect_num=args.preselect_num).to(device)
     if args.modelpath is not None:
         checkpoint = torch.load(modelpath)
         loupe.load_state_dict(checkpoint['model_state_dict'])
@@ -237,16 +261,18 @@ if __name__ == '__main__':
     trainer = loupe_trainer(loupe,
                             slope=args.slope,
                             sparsity=args.sparsity,
-                            preselect=preselect, preselect_num=args.preselect_num,
+                            preselect=preselect, 
+                            preselect_num=args.preselect_num,
                             lrm=args.lrm,
                             lru=args.lru,
                             weight_decay=0,
-                            momentum=0,
+                            weight_ssim=args.weight_ssim,
                             epochs=args.epochs,
                             batchsize=args.batchsize,
                             val_batchsize=args.val_batchsize,
                             count_start=(args.epoch_start,args.batchind_start),
-                            dir_checkpoint:str='/mnt/shared_a/checkpoints/mri/',
-                            dir_hist=args.histpath)
+                            dir_checkpoint='/mnt/shared_a/checkpoints/leo/mri/',
+                            dir_hist=args.histpath,
+                            device=device)
     
-    trainer.run(traindata, valdata, save_cp=False)
+    trainer.run(traindata, valdata, save_cp=args.save_cp)

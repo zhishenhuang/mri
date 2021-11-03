@@ -131,24 +131,24 @@ def prepare_data(mode='mnet',mnet=None, base=8, budget=32,batchsize=5,unet_incha
         acceleration_fold = str(int(train_in.shape[2]/(base+budget)))
         print(f'\n   Data successfully prepared with the provided MNet for acceleration fold {acceleration_fold}!\n')
         
-    if mode == 'rand':
+    if (mode=='rand') or (mode == 'equidist') or (mode == 'lfonly'):
         ## train a unet to reconstruct images from random mask
 #             train_full = torch.tensor(np.load('/home/huangz78/data/traindata_x.npz')['xfull'],dtype=datatype)
 #             val_full  = torch.tensor(np.load('/home/huangz78/data/valdata_x.npz')['xfull'] ,dtype=datatype)         
-        train_full = torch.tensor(np.load('/mnt/shared_a/data/fastMRI/knee_singlecoil_train.npz')['data'],dtype=datatype)
-        val_full  = torch.tensor(np.load('/mnt/shared_a/data/fastMRI/knee_singlecoil_val.npz')['data']  ,dtype=datatype)
+        train_full = torch.tensor(np.load('/mnt/shared_a/fastMRI/knee_singlecoil_train.npz')['data'],dtype=datatype)
+        val_full  = torch.tensor(np.load('/mnt/shared_a/fastMRI/knee_singlecoil_val.npz')['data']  ,dtype=datatype)
         for ind in range(train_full.shape[0]):
             train_full[ind,:,:] = train_full[ind,:,:]/train_full[ind,:,:].abs().max()
         for ind in range(val_full.shape[0]):
             val_full[ind,:,:]   = val_full[ind,:,:]/val_full[ind,:,:].abs().max()        
 
-        train_in = base_getinput(train_full,base=base,budget=budget,batchsize=batchsize,unet_channels=unet_inchans,datatype=datatype)
-        val_in   = base_getinput(val_full,base=base,budget=budget,batchsize=batchsize,unet_channels=unet_inchans,datatype=datatype)
+        train_in = base_getinput(train_full,base=base,budget=budget,batchsize=batchsize,unet_channels=unet_inchans,datatype=datatype,mode=mode)
+        val_in   = base_getinput(val_full,base=base,budget=budget,batchsize=batchsize,unet_channels=unet_inchans,datatype=datatype,mode=mode)
 
         train_label = torch.reshape(train_full,(train_full.shape[0],1,train_full.shape[1],train_full.shape[2]))
         val_label  = torch.reshape(val_full,(val_full.shape[0],1,val_full.shape[1],val_full.shape[2]))
         del train_full, val_full         
-
+        print(f'data preparation mode is {mode}')
     elif mode == 'greedy':
         ## train a unet to reconstruct images from greedy mask
         assert net.in_chans==1
@@ -201,6 +201,7 @@ class unet_trainer:
                  batchsize:int=5,
                  val_batchsize:int=5,
                  epochs:int=5,
+                 modename:str=None
                  ):
         self.ngpu = ngpu
         self.device = torch.device('cuda:0') if ngpu > 0 else torch.device('cpu')
@@ -222,6 +223,7 @@ class unet_trainer:
         self.batchsize = batchsize
         self.val_batchsize = val_batchsize
         self.epochs = epochs
+        self.modename = modename
             
         if self.dir_hist is None:
             self.train_df_loss   = list([]); self.val_df_loss   = list([]);  self.train_loss_epoch = list([])
@@ -276,7 +278,10 @@ class unet_trainer:
         return valloss_epoch
     
     def save(self,epoch=0,batchind=None):
-        recName = self.dir_checkpoint + f'TrainRec_unet_fbr_{str(self.net.in_chans)}_chans_{str(self.net.chans)}_epoch_{str(epoch)}.npz'
+        if self.modename is None:
+            recName = self.dir_checkpoint + f'TrainRec_unet_fbr_{str(self.net.in_chans)}_chans_{str(self.net.chans)}_epoch_{str(epoch)}.npz'
+        else:
+            recName = self.dir_checkpoint + f'TrainRec_unet_fbr_{str(self.net.in_chans)}_chans_{str(self.net.chans)}_{self.modename}_epoch_{str(epoch)}.npz'
         np.savez(recName,trainloss_df=self.train_df_loss, 
                          trainloss_ssim=self.train_ssim_loss, 
                          trainloss_epoch=self.train_loss_epoch,
@@ -286,7 +291,11 @@ class unet_trainer:
                          mnetpath=self.dir_mnet)
         print(f'\t History saved after epoch {epoch + 1}!')
         if (self.save_model) or (batchind is not None):
-            modelName = self.dir_checkpoint + f'unet_fbr_{str(self.net.in_chans)}_chans_{str(self.net.chans)}_epoch_{str(epoch)}.pt'
+            print(f'Training mode: {self.modename}')
+            if self.modename is None:
+                modelName = self.dir_checkpoint + f'unet_fbr_{str(self.net.in_chans)}_chans_{str(self.net.chans)}_epoch_{str(epoch)}.pt'
+            else:
+                modelName = self.dir_checkpoint + f'unet_fbr_{str(self.net.in_chans)}_chans_{str(self.net.chans)}_{self.modename}_epoch_{str(epoch)}.pt'
             torch.save({'model_state_dict': self.net.state_dict()}, modelName)  
             if batchind is None:
                 print(f'\t Checkpoint saved after epoch {epoch + 1}!')
@@ -379,7 +388,7 @@ def get_args():
     parser.add_argument('-lrwd', '--lr-weight-decay', metavar='LRWD', type=float, nargs='?', default=0,
                         help='Learning rate weight decay', dest='lrwd')
     
-    parser.add_argument('-m','--mode',metavar='M',type=str,nargs='?',default='mnet',
+    parser.add_argument('-m','--mode',metavar='M',type=str,nargs='?',default='rand',
                         help='training mode', dest='mode')
     
     parser.add_argument('-utype', '--unet-type', type=int, default=2,
@@ -397,8 +406,8 @@ def get_args():
     parser.add_argument('-bg','--budget',metavar='BG',type=int,nargs='?',default=32,
                         help='number of high frequencies to sample', dest='budget')
     
-    parser.add_argument('-mp', '--mnet-path', type=str, default='/mnt/shared_a/checkpoints/leo/mri/mnet_v2_split_trained_cf_8_bg_32_unet_in_chan_1_epoch9.pt',
-                        help='path file for a mnet', dest='mnetpath')
+    parser.add_argument('-mp', '--mnet-path', type=str, default=None,
+                        help='path file for a mnet', dest='mnetpath') # '/mnt/shared_a/checkpoints/leo/mri/mnet_v2_split_trained_cf_8_bg_32_unet_in_chan_1_epoch9.pt'
     parser.add_argument('-up', '--unet-path', type=str, default=None,
                         help='path file for a unet', dest='unetpath')
     parser.add_argument('-hp', '--history-path', type=str, default=None,
@@ -474,7 +483,8 @@ if __name__ == '__main__':
                            dir_mnet=args.mnetpath,
                            batchsize=args.batchsize,
                            val_batchsize=args.val_batchsize,
-                           epochs=args.epochs)
+                           epochs=args.epochs,
+                           modename=args.mode)
     
     trainer.run(train_in,train_label,val_in,val_label,save_cp=True)
     
