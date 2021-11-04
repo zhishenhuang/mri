@@ -120,7 +120,7 @@ class alternating_trainer():
             print(f'\t Checkpoint saved at epoch {epoch+1}, iter {self.global_step + 1}, batchind {batchind+1}!')
         else:
             print(f'\t Checkpoint saved at epoch {epoch+1}, iter {self.global_step + 1}!')
-        filepath = self.dir_checkpoint + 'alternating_update_error_track_v2_'+self.acceleration_fold+'fold_'+ 'unet_in_chan_' + str(self.unet.in_chans) + '.npz'
+        filepath = self.dir_checkpoint + 'alternating_update_error_track_v2_'+self.acceleration_fold+'fold_'+ 'unet_in_chan_' + str(self.unet.in_chans) + f'_epoch{epoch}' + '.npz'
         np.savez(filepath,loss_rand=self.loss_rand,loss_after=self.loss_after,loss_before=self.loss_before,loss_val=self.loss_val)
         torch.cuda.empty_cache()
     

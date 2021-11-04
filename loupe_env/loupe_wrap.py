@@ -8,7 +8,6 @@ from typing import List
 import loupe_env.line_sampler
 from loupe_env.line_sampler import *
 
-sys.path.insert(0,'/home/huangz78/mri/unet/')
 import unet.unet_model
 from unet.unet_model import UNet
 
@@ -35,7 +34,7 @@ class LOUPE(nn.Module):
     """
     def __init__(
         self,
-        n_channels: int = 1,
+        in_chans: int = 1,
         unet_skip: bool = True,
         shape: List[int] = [320, 320],
         slope: float = 5,
@@ -60,7 +59,7 @@ class LOUPE(nn.Module):
             self.samplers.append(sampler)
         
         if unet is None:
-            self.unet = UNet(in_chans=n_channels,n_classes=1,bilinear=(not unet_skip),skip=unet_skip)
+            self.unet = UNet(in_chans=in_chans,n_classes=1,bilinear=(not unet_skip),skip=unet_skip)
         else:
             self.unet = unet
 #         if in_chans == 1:

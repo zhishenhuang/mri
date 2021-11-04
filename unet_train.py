@@ -19,90 +19,6 @@ from mnet.mnet_v2 import MNet
 import copy
 dir_checkpoint = '/mnt/shared_a/checkpoints/leo/recon/'
 
-
-def mnet_getinput(mnet,data,base=8,budget=32,batchsize=10,unet_channels=1,return_mask=False,device=torch.device('cpu')):
-    '''
-    assume the input data has the dimension [img,heg,wid]
-    returned data in the format [NCHW]
-    '''   
-    mnet.eval()
-    mnet.to(device)
-    with torch.no_grad():
-        lowfreqmask = mask_naiveRand(data.shape[1],fix=base,other=0,roll=False)[0]
-        heg,wid  = data.shape[1],data.shape[2]
-        imgshape = (heg,wid)
-        yfull = F.fftn(data,dim=(1,2),norm='ortho')
-        y = torch.zeros_like(yfull)
-        y[:,lowfreqmask==1,:] = yfull[:,lowfreqmask==1,:]    
-        x_ifft = torch.zeros(len(yfull),unet_channels,heg,wid,device=torch.device('cpu'))
-        if return_mask:
-            masks = torch.zeros(len(yfull),heg,device=device)
-
-        batchind  = 0
-        batchnums = int(np.ceil(data.shape[0]/batchsize))
-        while batchind < batchnums:
-            batch = torch.arange(batchsize*batchind, min(batchsize*(batchind+1),data.shape[0]))
-            yfull_b = yfull[batch,:,:].to(device)
-            y_lf    = y[batch,:,:].to(device)
-            y_in    = torch.zeros(len(batch),2,heg,wid,device=device)
-            y_in[:,0,:,:] = torch.real(y_lf)
-            y_in[:,1,:,:] = torch.imag(y_lf)
-            y_in   = F.fftshift(y_in,dim=(2,3))
-            mask_b = F.ifftshift(mnet_wrapper(mnet,y_in,budget,imgshape,normalize=True,detach=True,device=device),dim=(1))
-
-            if return_mask:
-                masks[batch,:] = mask_b        
-            y_mnet_b = torch.zeros_like(yfull_b,device=device)
-            for ind in range(len(mask_b)):
-                y_mnet_b[:,mask_b[ind,:]==1,:] = yfull_b[:,mask_b[ind,:]==1,:]
-            if   unet_channels == 1:
-                x_ifft[batch,0,:,:] = torch.abs(F.ifftn(y_mnet_b,dim=(1,2),norm='ortho')).cpu()
-            elif unet_channels == 2:
-                x_ifft_c = F.ifftn(y_mnet_b,dim=(1,2),norm='ortho')
-                x_ifft[batch,0,:,:] = torch.real(x_ifft_c).cpu()
-                x_ifft[batch,1,:,:] = torch.imag(x_ifft_c).cpu()
-            batchind += 1
-        
-    if return_mask:
-        return x_ifft, masks
-    else:
-        return x_ifft
-    
-def base_getinput(data,base=8,budget=32,batchsize=5,unet_channels=1,datatype=torch.float,mode='rand'):
-    '''
-    assume the input data has the dimension [img,heg,wid]
-    returned data in the format [NCHW]
-    '''   
-    yfull = F.fftn(data,dim=(1,2),norm='ortho')
-    y_lf  = torch.zeros_like(yfull)
-    num_pts,heg,wid = data.shape[0],data.shape[1],data.shape[2]
-    batchind  = 0
-    batchnums = int(np.ceil(num_pts/batchsize))      
-    while batchind < batchnums:
-        batch  = torch.arange(batchind*batchsize,min((batchind+1)*batchsize,num_pts))
-        if   mode == 'rand':
-            lfmask = mask_naiveRand(data.shape[1],fix=base,other=budget,roll=False)[0] 
-        if   mode == 'lfonly':
-            lfmask = mask_naiveRand(data.shape[1],fix=base+budget,other=0,roll=False)[0]
-        elif mode == 'equidist':
-            lfmask = mask_equidist(data.shape[1],fix=base,other=budget,roll=False)
-        batchdata_full = yfull[batch,:,:]
-        batchdata      = torch.zeros_like(batchdata_full)
-        batchdata[:,lfmask==1,:] = batchdata_full[:,lfmask==1,:]
-        y_lf[batch,:,:] = batchdata
-        batchind += 1
-    
-    if unet_channels == 2:                
-        x_ifft = F.ifftn(y_lf,dim=(1,2),norm='ortho')
-        x_in   = torch.zeros((num_pts,2,heg,wid),dtype=datatype)
-        x_in[:,0,:,:] = torch.real(x_ifft)
-        x_in[:,1,:,:] = torch.imag(x_ifft)       
-    elif unet_channels == 1:
-        x_ifft = torch.abs(F.ifftn(y_lf,dim=(1,2),norm='ortho'))                
-        x_in   = torch.reshape(x_ifft, (num_pts,1,heg,wid)).to(datatype)
-    
-    return x_in
-
 def prepare_data(mode='mnet',mnet=None, base=8, budget=32,batchsize=5,unet_inchans=2,datatype=torch.float,device=torch.device('cpu')):
     if mode == 'mnet':
         train_full = torch.tensor(np.load('/mnt/shared_a/fastMRI/knee_singlecoil_train.npz')['data'],dtype=datatype)
@@ -179,7 +95,6 @@ def prepare_data(mode='mnet',mnet=None, base=8, budget=32,batchsize=5,unet_incha
         del xs, imgs, masks
         
     return train_in, train_label, val_in, val_label
-
 
 class unet_trainer:
     def __init__(self,

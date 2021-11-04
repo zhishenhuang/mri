@@ -2,6 +2,7 @@ import sys
 import os
 import torch
 import torch.nn as nn
+import torch.optim as optim
 import numpy as np
 import random
 import copy
@@ -57,15 +58,20 @@ class MoDL_trainer:
     def __init__(self,
                  model: nn.Module,
                  save_dir: str,
-                 epochs=1,
-                 lr=1e-4, 
-                 lr_weight_decay=0,
-                 batchsize=3, 
-                 valbatchsize=5,
-                 count_start=(0,0),
-                 weight_ssim=5,
+                 epochs:int=1,
+                 lr:float=1e-4, 
+                 lr_weight_decay:float=0,
+                 lr_s_stepsize:int=40,
+                 lr_s_gamma:float=.1,
+                 patience:int=5,
+                 min_lr:float=5e-6,
+                 reduce_factor:float=.8,
+                 batchsize:int=3, 
+                 valbatchsize:int=5,
+                 count_start:tuple=(0,0),
+                 weight_ssim:float=5,
                  p='fro',
-                 ngpu=0,
+                 ngpu:int=0,
                  hist_dir:str=None,
                  mnetpath:str=None): 
         
@@ -75,6 +81,12 @@ class MoDL_trainer:
         self.epochs = epochs
         self.lr = lr
         self.lr_weight_decay = lr_weight_decay
+        self.lr_s_stepsize = lr_s_stepsize
+        self.lr_s_gamma = lr_s_gamma
+        self.patience = patience
+        self.min_lr = min_lr
+        self.reduce_factor = reduce_factor
+        
         self.batchsize = batchsize
         self.valbatchsize = valbatchsize
         self.count_start = count_start
@@ -92,13 +104,13 @@ class MoDL_trainer:
             self.val_lp           = []          
         else:
             histRec = np.load(hist_dir)
-            self.train_ssim       = list(histRec[train_ssim])
-            self.train_lp         = list(histRec[train_lp])
-            self.train_loss       = list(histRec[trainloss])
-            self.train_loss_epoch = list(histRec[trainloss_epoch])           
-            self.val_loss         = list(histRec[valloss_epoch])
-            self.val_ssim         = list(histRec[val_ssim])
-            self.val_lp           = list(histRec[val_lp])
+            self.train_ssim       = list(histRec['train_ssim'])
+            self.train_lp         = list(histRec['train_lp'])
+            self.train_loss       = list(histRec['trainloss'])
+            self.train_loss_epoch = list(histRec['trainloss_epoch'])           
+            self.val_loss         = list(histRec['valloss_epoch'])
+            self.val_ssim         = list(histRec['val_ssim'])
+            self.val_lp           = list(histRec['val_lp'])
             print(f'Training history is loaded successfully from : {hist_dir}')
     def empty_cache(self):
         torch.cuda.empty_cache()
@@ -146,7 +158,7 @@ class MoDL_trainer:
             self.val_lp.append( loss_lp.item()/batchnums )
             self.val_ssim.append( -loss_ssim.item()/batchnums )
             print(f' [{epoch+1}/{self.epochs}] L2loss/VAL: {loss_lp.item()/batchnums:.4f}, SSIM/VAL: {-loss_ssim.item()/batchnums:.4f}, Loss/VAL:{valloss/batchnums:.4f}')                    
-                
+        return valloss/batchnums         
     def run(self,traindata,trainlabels,trainmasks,valdata,vallabels,valmasks,save_cp=True):
         '''
         Assume the data is already shuffled
@@ -172,6 +184,7 @@ class MoDL_trainer:
         global_step = 0
         batchnums = int(np.ceil(n_train/self.batchsize))       
         optimizer = RMSprop(self.model.parameters(), lr=self.lr, weight_decay=self.lr_weight_decay)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=self.patience, verbose=True, min_lr=self.min_lr,factor=self.reduce_factor)
         
         self.model.train()
         self.validate(valdata,vallabels,valmasks)
@@ -208,7 +221,8 @@ class MoDL_trainer:
                 self.train_loss_epoch.append(trainloss_epoch/batchnums)  
                 print(f'[{global_step}][{epoch+1}/{self.epochs}] loss/train: {trainloss_epoch/batchnums}')          
                 self.empty_cache()           
-                self.validate(valdata,vallabels,valmasks,epoch=epoch)
+                valloss_epoch = self.validate(valdata,vallabels,valmasks,epoch=epoch)
+                scheduler.step(valloss_epoch)
                 if save_cp:
                     self.save_model(epoch=epoch)
         except KeyboardInterrupt:

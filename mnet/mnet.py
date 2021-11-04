@@ -82,9 +82,9 @@ class OutConv(nn.Module):
 
 
 class MNet(nn.Module):
-    def __init__(self, in_channels=1,imgsize=320,out_size=320,beta=1,poolk=3):
+    def __init__(self, in_chans=1,imgsize=320,out_size=320,beta=1,poolk=3):
         super(MNet, self).__init__()
-        self.in_channels = in_channels
+        self.in_channels = in_chans
         
         if isinstance(imgsize,int):
             self.imgHeg = imgsize

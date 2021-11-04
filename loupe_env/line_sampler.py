@@ -117,12 +117,11 @@ class LineConstrainedProbMask(nn.Module):
             (torch.Tensor): Output tensor of shape NHWC
         """
         logits = self.mask
-        mask   = torch.sigmoid(self.slope * logits).view(1, 1, self.mask.shape[0], 1) 
+        mask   = torch.sigmoid(self.slope * logits).view(1, 1, self.mask.shape[0], 1)
         if self.preselect:
             if self.preselect_num % 2 == 0:
                 zeros = torch.zeros(1, 1, self.preselect_num // 2, 1).to(input.device) 
                 mask = torch.cat([zeros, mask, zeros], dim=2)
-                mask.retain_grad()
             else:
                 raise NotImplementedError()
 
@@ -177,12 +176,11 @@ class LOUPESampler(nn.Module):
         binarized_mask = self.binarize(rescaled_mask)
         binarized_mask[..., :self.preselect_num_one_side , :] = 1  # wrt unrolled masks
         binarized_mask[..., -self.preselect_num_one_side:, :] = 1
-        binarized_mask.retain_grad()
 
 #         neg_entropy = self._mask_neg_entropy(rescaled_mask)
 #         masked_kspace = binarized_mask * kspace
         binarized_mask_mat = torch.tile(torch.tile(binarized_mask,(1,1,1,self.shape[1])),(kspace.shape[0],1,1,1))
-        binarized_mask_mat.retain_grad()
+
 #         kspace[:,:,binarized_mask==0,:] = 0
         masked_kspace = torch.mul(binarized_mask_mat , kspace) 
 #         data_to_vis_sampler = {'prob_mask': transforms.fftshift(prob_mask[0,:,:,0],dim=(0,1)).cpu().detach().numpy(), 
