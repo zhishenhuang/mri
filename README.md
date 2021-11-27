@@ -1,6 +1,6 @@
 # mri
 
-This repository is used for the computation in the paper [Single-pass Object-adaptive Data Undersampling and Reconstruction for MRI](https://arxiv.org/abs/2111.09212)
+This repository is used for the computation in the paper [Single-pass Object-adaptive Data Undersampling and Reconstruction for MRI](https://arxiv.org/abs/2111.09212).
 
 Citation information:
 
