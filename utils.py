@@ -130,16 +130,16 @@ def kplot(y,roll=False,log=False,cmap=None,flip=True,img_name=None):
                 im2 = np.roll(im2,tuple(n//2 for n in im2.shape[:2]), axis=(0,1))
         if yshape[-1] == 2:
             fig,axs = plt.subplots(2,1,figsize=(15,10))
-            hd1 = axs[0].imshow(im1,cmap=cmap)
+            hd1 = axs[0].imshow(im1,cmap=cmap,origin='lower')
             axs[0].set_title('Real part mag')
             plt.colorbar(hd1,ax=axs[0])
-            hd2 = axs[1].imshow(im2,cmap=cmap)
+            hd2 = axs[1].imshow(im2,cmap=cmap,origin='lower')
             axs[1].set_title('Imag part mag')
             fig.colorbar(hd2,ax=axs[1])
             plt.show()
         else:
             fig,axs = plt.subplots(1,1,figsize=(5,5))
-            hd1 = axs.imshow(im1,cmap=cmap)
+            hd1 = axs.imshow(im1,cmap=cmap,origin='lower')
             # axs.set_title('Real part mag')
             plt.colorbar(hd1,ax=axs)
             plt.show()
@@ -151,14 +151,14 @@ def kplot(y,roll=False,log=False,cmap=None,flip=True,img_name=None):
             y = np.roll(y,tuple(n//2 for n in y.shape[:2]), axis=(0,1))  # move the center frequency to the center of the image
         if not log:
             try:
-                hd1 = axs.imshow(y,cmap=cmap)
+                hd1 = axs.imshow(y,cmap=cmap,origin='lower')
             except TypeError:
-                hd1 = axs.imshow(np.abs(y),cmap=cmap)
+                hd1 = axs.imshow(np.abs(y),cmap=cmap,origin='lower')
         else:
             try:
-                hd1 = axs.imshow(np.log(y),cmap=cmap)
+                hd1 = axs.imshow(np.log(y),cmap=cmap,origin='lower')
             except TypeError:
-                hd1 = axs.imshow(np.log(np.abs(y)),cmap=cmap)
+                hd1 = axs.imshow(np.log(np.abs(y)),cmap=cmap,origin='lower')
         if img_name is not None:
             axs.set_title(img_name)
         plt.colorbar(hd1,ax=axs)
@@ -170,9 +170,9 @@ def kplot(y,roll=False,log=False,cmap=None,flip=True,img_name=None):
         mask    = np.reshape(y,(-1,1))
         mask2D  = np.tile(mask,(1,mask.size))
         if flip:
-            hd1 = axs.imshow(1-mask2D,cmap='Greys')
+            hd1 = axs.imshow(1-mask2D,cmap='Greys',origin='lower')
         else:
-            hd1 = axs.imshow(mask2D,cmap='Greys')
+            hd1 = axs.imshow(mask2D,cmap='Greys',origin='lower')
         axs.set_xticks([])
         axs.set_xticks([], minor=True) # for minor ticks
         axs.set_ylabel('Frequencies')
@@ -704,7 +704,7 @@ def mnet_getinput(mnet,data,base=8,budget=32,batchsize=10,unet_channels=1,return
     else:
         return x_ifft
     
-def base_getinput(data,base=8,budget=32,batchsize=5,unet_channels=1,datatype=torch.float,mode='rand'):
+def base_getinput(data,base=8,budget=32,batchsize=5,unet_channels=1,datatype=torch.float,mode='rand',return_mask=False):
     '''
     assume the input data has the dimension [img,heg,wid]
     returned data in the format [NCHW]
@@ -713,7 +713,9 @@ def base_getinput(data,base=8,budget=32,batchsize=5,unet_channels=1,datatype=tor
     y_lf  = torch.zeros_like(yfull)
     num_pts,heg,wid = data.shape[0],data.shape[1],data.shape[2]
     batchind  = 0
-    batchnums = int(np.ceil(num_pts/batchsize))      
+    batchnums = int(np.ceil(num_pts/batchsize))        
+    masks = torch.zeros(num_pts,heg)
+        
     while batchind < batchnums:
         batch  = torch.arange(batchind*batchsize,min((batchind+1)*batchsize,num_pts))
         if   mode == 'rand':
@@ -726,6 +728,7 @@ def base_getinput(data,base=8,budget=32,batchsize=5,unet_channels=1,datatype=tor
         batchdata      = torch.zeros_like(batchdata_full)
         batchdata[:,lfmask==1,:] = batchdata_full[:,lfmask==1,:]
         y_lf[batch,:,:] = batchdata
+        masks[batch,:]  = lfmask
         batchind += 1
     
     if unet_channels == 2:                
@@ -737,8 +740,57 @@ def base_getinput(data,base=8,budget=32,batchsize=5,unet_channels=1,datatype=tor
         x_ifft = torch.abs(F.ifftn(y_lf,dim=(1,2),norm='ortho'))                
         x_in   = torch.reshape(x_ifft, (num_pts,1,heg,wid)).to(datatype)
     
-    return x_in
+    if return_mask:
+        return x_in, masks # replaced 'lfmask' with masks, Feb 21
+    else:
+        return x_in
+    
+def energydist_getinput(data,base=8,budget=32,unet_channels=1,datatype=torch.float,energy_vec=None,return_dist=False):
+    '''
+    input data in the format [NHW]
+    sampling k-space rows according to energy_distribution
+    assume the input data has the dimension [img,heg,wid]
+    returned data in the format [NCHW]
+    return full energy vector
+    ''' 
+    num_pts = data.shape[0]
+    imgHeg  = data.shape[1]
+    imgWid  = data.shape[2]
+    y_full = F.fftshift(F.fftn(data,dim=(1,2),norm='ortho'),dim=(1,2))
+    if energy_vec is None:
+        energy_vec = torch.zeros(imgHeg)
+        for img_fft in y_full:
+            energy_vec += torch.sum(torch.square(torch.abs(img_fft)).to(datatype),dim=1)
+        energy_vec /= len(y_full)       # average by total amount of samples
+        energy_vec /= torch.sum(energy_vec) # normalized by total energy
 
+    indcohort = setdiff1d( torch.arange(0,imgHeg), torch.arange(imgHeg//2-base//2, imgHeg//2+base//2+base%2, 1) )
+    energy = copy.deepcopy(energy_vec[indcohort])
+    energy /= energy.sum()
+    for ind in range(len(y_full)):
+        sample = np.random.choice(indcohort, size=budget, replace=False, p=np.array(energy))
+        erase  = np.setdiff1d(np.array(indcohort),sample)
+        y_full[ind,erase,:] = 0
+    
+    if unet_channels == 2:                
+        x_ifft = F.ifftn(F.ifftshift(y_full,dim=(1,2)) ,dim=(1,2),norm='ortho')
+        x_in   = torch.zeros((num_pts,2,imgHeg,imgWid),dtype=datatype)
+        x_in[:,0,:,:] = torch.real(x_ifft)
+        x_in[:,1,:,:] = torch.imag(x_ifft)       
+    elif unet_channels == 1:
+        x_ifft = torch.abs(F.ifftn(F.ifftshift(y_full,dim=(1,2)) ,dim=(1,2),norm='ortho'))                
+        x_in   = torch.reshape(x_ifft, (num_pts,1,imgHeg,imgWid)).to(datatype)
+    
+    if len(y_full) == 1:
+        mask = torch.ones(1,imgHeg)
+        mask[0,erase] = 0
+        return x_in, mask
+    else:
+        if return_dist:
+            return x_in, energy_vec
+        else:
+            return x_in
+    
 
 def loupe_eval(loupe,testdata,preselect_num,sparsity,\
                batchsize=5,\
@@ -872,18 +924,26 @@ def mnet_eval(testdata,mnet,model,base,budget,batchsize=25,datatype=torch.float,
     return l1err,l2err,hfens,ssims,psnrs
 
 # baseline eval
-def baseline_eval(testdata,model,base,budget,batchsize=25,mode='rand',datatype=torch.float,device=torch.device('cpu')):
+def baseline_eval(testdata,model,base,budget,batchsize=25,mode='rand',energy_vec=None,
+                  datatype=torch.float,device=torch.device('cpu')):
     
     model.to(device)
     for ind in range(testdata.shape[0]):
         testdata[ind,:,:] = testdata[ind,:,:]/torch.max(torch.abs(testdata[ind,:,:]))
     print('test data size:', testdata.shape)
     batch_nums  = int(np.ceil(testdata.shape[0]/batchsize))
-    
-    test_in = base_getinput(testdata,base=base,budget=budget,batchsize=batchsize,unet_channels=model.in_chans,datatype=torch.float,mode=mode)
+    if model.__class__.__name__ != 'MoDL':
+        if mode != 'prob':
+            test_in = base_getinput(testdata,base=base,budget=budget,batchsize=batchsize,
+                                    unet_channels=model.in_chans,datatype=torch.float,mode=mode)
+        else:
+            test_in = energydist_getinput(testdata,base=base,budget=budget,
+                                          unet_channels=model.in_chans,datatype=datatype,energy_vec=energy_vec,return_dist=False)
+    else:
+        test_in, masks = base_getinput(testdata,base=base,budget=budget,batchsize=batchsize,
+                                    unet_channels=model.model.in_chans,return_mask=True,datatype=torch.float,mode=mode)
     labels = testdata.to(datatype)
     del testdata  
-    
     l1err = torch.zeros(test_in.shape[0])
     l2err = torch.zeros(test_in.shape[0])
     hfens = torch.zeros(test_in.shape[0])
@@ -895,7 +955,18 @@ def baseline_eval(testdata,model,base,budget,batchsize=25,mode='rand',datatype=t
         while batchind<batch_nums:
             batch = torch.arange(batchsize*batchind, min(batchsize*(batchind+1),test_in.shape[0]))
             x_in  = test_in[batch].to(device)
-            x     = torch.squeeze(model(x_in).detach())
+            if ((model.__class__.__name__ == 'Unet') or (model.__class__.__name__ == 'UNet')):
+                x     = torch.squeeze(model(x_in).detach())
+            elif model.__class__.__name__ == 'MoDL':
+                if len(masks.shape) == 2: # input mask is in the format of NH
+                    mask_test_in = copy.deepcopy(masks[batch])
+                    mask_test    = torch.zeros(mask_test_in.shape[0],x_in.shape[2],x_in.shape[3],device=device)
+                    for ind in range(len(mask_test)):
+                        mask_tmp = mask_test_in[ind].unsqueeze(1).repeat(1,x_in.shape[3])
+                        mask_test[ind] = mask_tmp
+                    mask_test = mask_test.unsqueeze(1).repeat(1,2,1,1)
+                    smap = torch.ones(x_in.shape,device=device).unsqueeze(1)
+                x = model(x_in,mask=mask_test,smap=smap).detach()[:,0,:,:]
             xstar = labels[batch].to(device)
             # to implement various criteria
             l1err[batch] = compute_l1err(x,xstar)
@@ -907,3 +978,35 @@ def baseline_eval(testdata,model,base,budget,batchsize=25,mode='rand',datatype=t
 
             batchind += 1
     return l1err,l2err,hfens,ssims,psnrs
+
+def data_augmentation(data,label):
+    assert(data.shape[2:]==label.shape[2:])
+    assert(data.shape[0] ==label.shape[0])
+    
+    heg,wid = data.shape[2],data.shape[3]
+    data_chans  = data.shape[1]
+    label_chans = label.shape[1]
+    data_aug  = torch.zeros_like(data)
+    label_aug = torch.zeros_like(label)
+    
+    for ind in range(len(data)):
+        flip_flag = (np.random.rand() > .5)
+        if flip_flag: # Horizontal flip
+            data[ind]  = torch.flip(data[ind], dims=[2]).clone()
+            label[ind] = torch.flip(label[ind],dims=[2]).clone()            
+        # Random cropping
+        if (np.random.rand() > .5):
+            pad = 10
+            dim_1, dim_2 = np.random.randint(pad*2+1, size=2)
+            
+            extended_data = torch.zeros((data_chans,heg+pad*2,wid+pad*2),dtype=torch.float)
+            extended_data[:,pad:-pad,pad:-pad] = data[ind]
+            data[ind] = extended_data[:,dim_1:dim_1+heg,dim_2:dim_2+wid].clone()
+            
+            extended_label = torch.zeros((label_chans,heg+pad*2,wid+pad*2),dtype=torch.float)
+            extended_label[:,pad:-pad,pad:-pad] = label[ind]
+            label[ind] = extended_label[:,dim_1:dim_1+heg,dim_2:dim_2+wid].clone()
+        
+        data_aug[ind]  = data[ind]
+        label_aug[ind] = label[ind]
+    return data_aug,label_aug

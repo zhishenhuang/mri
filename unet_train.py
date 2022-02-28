@@ -20,24 +20,25 @@ import copy
 dir_checkpoint = '/mnt/shared_a/checkpoints/leo/recon/'
 
 def prepare_data(mode='mnet',mnet=None, base=8, budget=32,batchsize=5,unet_inchans=2,datatype=torch.float,device=torch.device('cpu')):
-    if mode == 'mnet':
+    infos = f'base{base}_budget{budget}_'
+    if (mode == 'mnet') or (mode=='rand') or (mode == 'equidist') or (mode == 'lfonly') or (mode == 'prob'):
         train_full = torch.tensor(np.load('/mnt/shared_a/fastMRI/knee_singlecoil_train.npz')['data'],dtype=datatype)
         val_full   = torch.tensor(np.load('/mnt/shared_a/fastMRI/knee_singlecoil_val.npz')['data'],  dtype=datatype)
-
         for ind in range(train_full.shape[0]):
             train_full[ind,:,:] = train_full[ind,:,:]/train_full[ind,:,:].abs().max()
         for ind in range(val_full.shape[0]):
-            val_full[ind,:,:]  = val_full[ind,:,:]/val_full[ind,:,:].abs().max()
-
+            val_full[ind,:,:]   = val_full[ind,:,:]/val_full[ind,:,:].abs().max()    
+        
         shuffle_inds = torch.randperm(train_full.shape[0])
         train_full   = train_full[shuffle_inds,:,:]
 
         shuffle_inds = torch.randperm(val_full.shape[0])
         val_full     = val_full[shuffle_inds,:,:]
-
+        
         train_label  = torch.reshape(train_full,(train_full.shape[0],1,train_full.shape[1],train_full.shape[2]))
         val_label    = torch.reshape(val_full,(val_full.shape[0],1,val_full.shape[1],val_full.shape[2]))
-
+        
+    if mode == 'mnet':
         ## create train_in and val_in
         train_in = mnet_getinput(mnet,train_full,base=base,budget=budget,batchsize=batchsize,unet_channels=unet_inchans,return_mask=False,device=device)
         del train_full
@@ -49,50 +50,49 @@ def prepare_data(mode='mnet',mnet=None, base=8, budget=32,batchsize=5,unet_incha
         
     if (mode=='rand') or (mode == 'equidist') or (mode == 'lfonly'):
         ## train a unet to reconstruct images from random mask
-#             train_full = torch.tensor(np.load('/home/huangz78/data/traindata_x.npz')['xfull'],dtype=datatype)
-#             val_full  = torch.tensor(np.load('/home/huangz78/data/valdata_x.npz')['xfull'] ,dtype=datatype)         
-        train_full = torch.tensor(np.load('/mnt/shared_a/fastMRI/knee_singlecoil_train.npz')['data'],dtype=datatype)
-        val_full  = torch.tensor(np.load('/mnt/shared_a/fastMRI/knee_singlecoil_val.npz')['data']  ,dtype=datatype)
-        for ind in range(train_full.shape[0]):
-            train_full[ind,:,:] = train_full[ind,:,:]/train_full[ind,:,:].abs().max()
-        for ind in range(val_full.shape[0]):
-            val_full[ind,:,:]   = val_full[ind,:,:]/val_full[ind,:,:].abs().max()        
-
+        
         train_in = base_getinput(train_full,base=base,budget=budget,batchsize=batchsize,unet_channels=unet_inchans,datatype=datatype,mode=mode)
         val_in   = base_getinput(val_full,base=base,budget=budget,batchsize=batchsize,unet_channels=unet_inchans,datatype=datatype,mode=mode)
 
-        train_label = torch.reshape(train_full,(train_full.shape[0],1,train_full.shape[1],train_full.shape[2]))
-        val_label  = torch.reshape(val_full,(val_full.shape[0],1,val_full.shape[1],val_full.shape[2]))
         del train_full, val_full         
         print(f'data preparation mode is {mode}')
-    elif mode == 'greedy':
-        ## train a unet to reconstruct images from greedy mask
-        assert net.in_chans==1
-        imgs  = torch.tensor( np.load('/home/huangz78/data/data_gt.npz')['imgdata'] ).permute(2,0,1)
-        masks = torch.tensor( np.load('/home/huangz78/data/data_gt_greedymask.npz')['mask'].T ) # labels are already rolled
-        xs    = torch.zeros((imgs.shape[0],1,imgs.shape[1],imgs.shape[2]),dtype=torch.float)
+        
+    elif mode == 'prob':
+        train_in, energy_vec = energydist_getinput(train_full,base=base,budget=budget,unet_channels=unet_inchans,
+                                                   datatype=datatype,energy_vec=None,return_dist=True)
+        val_in               = energydist_getinput(val_full,base=base,budget=budget,unet_channels=unet_inchans,
+                                                   datatype=datatype,energy_vec=energy_vec,return_dist=False)
+        print(f'data preparation mode is {mode}')
+        torch.save({'energy_vec':energy_vec} , f'energy_vec_{infos}.pt')
+        print(f'energy_vec is saved for the setting {infos}')
+#     elif mode == 'greedy':
+#         ## train a unet to reconstruct images from greedy mask
+#         assert net.in_chans==1
+#         imgs  = torch.tensor( np.load('/home/huangz78/data/data_gt.npz')['imgdata'] ).permute(2,0,1)
+#         masks = torch.tensor( np.load('/home/huangz78/data/data_gt_greedymask.npz')['mask'].T ) # labels are already rolled
+#         xs    = torch.zeros((imgs.shape[0],1,imgs.shape[1],imgs.shape[2]),dtype=torch.float)
 
-        for ind in range(imgs.shape[0]):
-            imgs[ind,:,:] = imgs[ind,:,:]/torch.max(torch.abs(imgs[ind,:,:]))
-            y = F.fftshift(F.fftn(imgs[ind,:,:],dim=(0,1),norm='ortho'))
-            mask = masks[ind,:]
-            ysub = torch.zeros(y.shape,dtype=y.dtype)
-            ysub[mask==1,:] = y[mask==1,:]
-            xs[ind,0,:,:] = torch.abs(F.ifftn(torch.fft.ifftshift(ysub),dim=(0,1),norm='ortho'))
+#         for ind in range(imgs.shape[0]):
+#             imgs[ind,:,:] = imgs[ind,:,:]/torch.max(torch.abs(imgs[ind,:,:]))
+#             y = F.fftshift(F.fftn(imgs[ind,:,:],dim=(0,1),norm='ortho'))
+#             mask = masks[ind,:]
+#             ysub = torch.zeros(y.shape,dtype=y.dtype)
+#             ysub[mask==1,:] = y[mask==1,:]
+#             xs[ind,0,:,:] = torch.abs(F.ifftn(torch.fft.ifftshift(ysub),dim=(0,1),norm='ortho'))
 
-        imgNum = imgs.shape[0]
-        traininds, valinds = train_test_split(np.arange(imgNum),random_state=0,shuffle=True,train_size=round(imgNum*0.8))
-        np.savez('/home/huangz78/data/inds_rec.npz',traininds=traininds,valinds=valinds)
-        Heg,Wid,n_train,n_val = imgs.shape[1],imgs.shape[2],len(traininds),len(valinds)
+#         imgNum = imgs.shape[0]
+#         traininds, valinds = train_test_split(np.arange(imgNum),random_state=0,shuffle=True,train_size=round(imgNum*0.8))
+#         np.savez('/home/huangz78/data/inds_rec.npz',traininds=traininds,valinds=valinds)
+#         Heg,Wid,n_train,n_val = imgs.shape[1],imgs.shape[2],len(traininds),len(valinds)
 
-        train_full = imgs[traininds,:,:]
-        train_label= torch.reshape(train_full,(n_train,1,Heg,Wid))
-        valfull    = imgs[valinds,:,:]
-        val_label  = torch.reshape(valfull,(n_val,1,Heg,Wid))
-        train_in   = xs[traininds,:,:,:]
-        val_in     = xs[valinds ,:,:,:]
-        print('n_train = {}, n_val = {}'.format(n_train,n_val))
-        del xs, imgs, masks
+#         train_full = imgs[traininds,:,:]
+#         train_label= torch.reshape(train_full,(n_train,1,Heg,Wid))
+#         valfull    = imgs[valinds,:,:]
+#         val_label  = torch.reshape(valfull,(n_val,1,Heg,Wid))
+#         train_in   = xs[traininds,:,:,:]
+#         val_in     = xs[valinds ,:,:,:]
+#         print('n_train = {}, n_val = {}'.format(n_train,n_val))
+#         del xs, imgs, masks
         
     return train_in, train_label, val_in, val_label
 
@@ -116,7 +116,9 @@ class unet_trainer:
                  batchsize:int=5,
                  val_batchsize:int=5,
                  epochs:int=5,
-                 modename:str=None
+                 modename:str=None,
+                 data_aug:bool=False,
+                 infos:str=None
                  ):
         self.ngpu = ngpu
         self.device = torch.device('cuda:0') if ngpu > 0 else torch.device('cpu')
@@ -139,7 +141,9 @@ class unet_trainer:
         self.val_batchsize = val_batchsize
         self.epochs = epochs
         self.modename = modename
-            
+        self.data_aug = data_aug
+        self.infos = infos
+        
         if self.dir_hist is None:
             self.train_df_loss   = list([]); self.val_df_loss   = list([]);  self.train_loss_epoch = list([])
             self.train_ssim_loss = list([]); self.val_ssim_loss = list([]);  self.val_loss_epoch   = list([])
@@ -193,10 +197,13 @@ class unet_trainer:
         return valloss_epoch
     
     def save(self,epoch=0,batchind=None):
-        if self.modename is None:
-            recName = self.dir_checkpoint + f'TrainRec_unet_fbr_{str(self.net.in_chans)}_chans_{str(self.net.chans)}_epoch_{str(epoch)}.npz'
-        else:
-            recName = self.dir_checkpoint + f'TrainRec_unet_fbr_{str(self.net.in_chans)}_chans_{str(self.net.chans)}_{self.modename}_epoch_{str(epoch)}.npz'
+        recName_base = self.dir_checkpoint + f'TrainRec_unet_fbr_{str(self.net.in_chans)}_chans_{str(self.net.chans)}_aug_{self.data_aug}'
+        if self.modename is not None:
+            recName_base = recName_base + f'_{self.modename}_'
+        if self.infos    is not None:
+            recName_base = recName_base + self.infos
+        recName = recName_base + f'_epoch_{str(epoch)}.npz'
+        
         np.savez(recName,trainloss_df=self.train_df_loss, 
                          trainloss_ssim=self.train_ssim_loss, 
                          trainloss_epoch=self.train_loss_epoch,
@@ -205,18 +212,23 @@ class unet_trainer:
                          valloss_epoch=self.val_loss_epoch, 
                          mnetpath=self.dir_mnet)
         print(f'\t History saved after epoch {epoch + 1}!')
+        
         if (self.save_model) or (batchind is not None):
             print(f'Training mode: {self.modename}')
-            if self.modename is None:
-                modelName = self.dir_checkpoint + f'unet_fbr_{str(self.net.in_chans)}_chans_{str(self.net.chans)}_epoch_{str(epoch)}.pt'
-            else:
-                modelName = self.dir_checkpoint + f'unet_fbr_{str(self.net.in_chans)}_chans_{str(self.net.chans)}_{self.modename}_epoch_{str(epoch)}.pt'
+            modelName_base =   self.dir_checkpoint + f'unet_fbr_{str(self.net.in_chans)}_chans_{str(self.net.chans)}_aug_{self.data_aug}'
+            if self.modename is not None:
+                modelName_base = modelName_base + f'_{self.modename}_'
+            if self.infos    is not None:
+                modelName_base = modelName_base + self.infos           
+            modelName = modelName_base + f'_epoch_{str(epoch)}.pt'
+            
             torch.save({'model_state_dict': self.net.state_dict()}, modelName)  
             if batchind is None:
                 print(f'\t Checkpoint saved after epoch {epoch + 1}!')
             else:
                 print(f'\t Checkpoint saved at Python epoch {epoch}, batchnum {batchind}!')
                 print('Model is saved after interrupt~')
+            
         self.save_model = False
         torch.cuda.empty_cache()
     
@@ -245,6 +257,8 @@ class unet_trainer:
                     batch = torch.arange(batchind*self.batchsize,min((batchind+1)*self.batchsize,n_train))
                     imgbatch   = train_in[batch,:,:,:].to(self.device)
                     labelbatch = train_label[batch,:,:,:].to(self.device)
+                    if self.data_aug:
+                        imgbatch,labelbatch = data_augmentation(imgbatch,labelbatch)
                     pred = self.net(imgbatch)
                     
                     data_fidelity_loss = lpnorm(pred,labelbatch,p=self.p,mode='mean')
@@ -334,6 +348,8 @@ def get_args():
                         help='random seed', dest='seed')
     parser.add_argument('-wssim', '--weight-ssim', metavar='WS', type=float, nargs='?', default=5,
                         help='weight of SSIM loss in training', dest='weight_ssim')
+    parser.add_argument('-aug', '--data-aug', metavar='DA', type=bool, nargs='?', default=False,
+                        help='data augmentation', dest='data_aug')
     return parser.parse_args()
         
 if __name__ == '__main__':  
@@ -381,6 +397,7 @@ if __name__ == '__main__':
     
     train_in, train_label, val_in, val_label = prepare_data(mode=args.mode,mnet=mnet, base=args.base_freq, budget=args.budget,batchsize=args.batchsize,unet_inchans=unet.in_chans,datatype=torch.float,device=device)
     del mnet
+    infos = f'base{args.base_freq}_budget{args.budget}'
     trainer = unet_trainer(unet,
                            lr=args.lr,
                            lr_weight_decay=args.lrwd,
@@ -399,7 +416,9 @@ if __name__ == '__main__':
                            batchsize=args.batchsize,
                            val_batchsize=args.val_batchsize,
                            epochs=args.epochs,
-                           modename=args.mode)
+                           modename=args.mode,
+                           data_aug=args.data_aug,
+                           infos=infos)
     
     trainer.run(train_in,train_label,val_in,val_label,save_cp=True)
     
