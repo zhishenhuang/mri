@@ -64,7 +64,7 @@ class MoDL_trainer:
                  lr_s_stepsize:int=40,
                  lr_s_gamma:float=.1,
                  patience:int=5,
-                 min_lr:float=5e-6,
+                 min_lr:float=1e-6,
                  reduce_factor:float=.8,
                  batchsize:int=3, 
                  valbatchsize:int=5,
@@ -73,7 +73,9 @@ class MoDL_trainer:
                  p='fro',
                  ngpu:int=0,
                  hist_dir:str=None,
-                 mnetpath:str=None): 
+                 mnetpath:str=None,
+                 mode:str='mnet',
+                 infos:str=None): 
         
         self.model = model
         self.save_dir = save_dir
@@ -94,6 +96,8 @@ class MoDL_trainer:
         self.device = torch.device('cuda:0') if ((torch.cuda.is_available()) and (ngpu>0)) else torch.device('cpu')
         self.mnetpath = mnetpath
         self.p = p
+        self.mode = mode
+        self.infos = infos
         if hist_dir is None:          
             self.train_loss_epoch = []
             self.train_loss       = []
@@ -117,14 +121,15 @@ class MoDL_trainer:
         torch.backends.cuda.cufft_plan_cache.clear()
     
     def save_model(self,epoch=0,batchind=None):
-        recName = self.save_dir + f'Hist_MoDL_{self.model.model.in_chans}_chans_{self.model.model.chans}_epoch_{epoch}.npz'
+        recName = self.save_dir + f'Hist_MoDL_{self.mode.lower()}_{self.model.model.in_chans}_chans_{self.model.model.chans}_{self.infos}_epoch_{epoch}.npz'
+        modelName = self.save_dir + f'MoDL_{self.mode.lower()}_{self.model.model.in_chans}_chans_{self.model.model.chans}_{self.infos}_epoch_{epoch}.pt'
+        
         np.savez(recName,\
                  trainloss=self.train_loss,trainloss_epoch=self.train_loss_epoch,train_lp=self.train_lp,train_ssim=self.train_ssim,\
                  valloss_epoch=self.val_loss,val_ssim=self.val_ssim,val_lp=self.val_lp,\
                  mnetpath=self.mnetpath)
         print(f'\t History saved after epoch {epoch + 1}!')
-        
-        modelName = self.save_dir + f'MoDL_{self.model.model.in_chans}_chans_{self.model.model.chans}_epoch_{epoch}.pt'
+                
         torch.save({'model_state_dict': self.model.state_dict()}, modelName)  
         if batchind is None:
             print(f'\t Checkpoint saved after epoch {epoch + 1}!') 
@@ -159,11 +164,11 @@ class MoDL_trainer:
             self.val_ssim.append( -loss_ssim.item()/batchnums )
             print(f' [{epoch+1}/{self.epochs}] L2loss/VAL: {loss_lp.item()/batchnums:.4f}, SSIM/VAL: {-loss_ssim.item()/batchnums:.4f}, Loss/VAL:{valloss/batchnums:.4f}')                    
         return valloss/batchnums         
+    
     def run(self,traindata,trainlabels,trainmasks,valdata,vallabels,valmasks,save_cp=True):
         '''
         Assume the data is already shuffled
-        '''
-        
+        '''        
         if len(trainmasks.shape) == 2: # input mask is in the format of NH
             trainmasks_in = copy.deepcopy(trainmasks)
             trainmasks    = torch.zeros(trainmasks.shape[0],traindata.shape[2],traindata.shape[3])
