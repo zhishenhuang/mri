@@ -322,7 +322,7 @@ def mask_complete(highmask,imgHeg,rolled=True,dtyp=torch.float,device='cpu'): # 
     if rolled:
         coreInds = torch.arange(imgHeg//2-base//2, imgHeg//2+base//2+base%2,1,device=device)
     else:
-        coreInds = torch.cat((torch.arange(0,base//2,1,device=device),torch.arange(Heg-1,Heg-1-base//2-base%2,-1,device=device)))
+        coreInds = torch.cat((torch.arange(0,base//2,1,device=device),torch.arange(imgHeg-1,imgHeg-1-base//2-base%2,-1,device=device)))
     fullmask[:,coreInds] = 1
     fullmask[:,setdiff1d(torch.arange(0,imgHeg,device=device),coreInds)] = highmask
     return fullmask
@@ -490,10 +490,14 @@ def compute_hfen(recon: torch.Tensor,gt: torch.Tensor) -> np.ndarray:
     assume the input has the format [NHW]
     '''
     assert(recon.shape==gt.shape)
-    if type(recon) is torch.Tensor:
-        gt    = gt.to(torch.cfloat).cpu()
-    if type(gt) is torch.Tensor:
-        recon = recon.to(torch.cfloat).cpu()
+    if type(recon) is not torch.Tensor:
+        recon = torch.tensor(recon,dtype=torch.cfloat).cpu()
+    if type(gt) is not torch.Tensor:
+        gt = torch.tensor(gt,dtype=torch.cfloat).cpu()
+    
+    if len(recon.shape) == 2: # input format is [HW]
+        recon = recon.unsqueeze(0)
+        gt    = gt.unsqueeze(0)
     hfens = np.zeros(len(recon))
     for ind in range(len(recon)):
         img_gt     = gt[ind]
@@ -704,7 +708,7 @@ def mnet_getinput(mnet,data,base=8,budget=32,batchsize=10,unet_channels=1,return
     else:
         return x_ifft
     
-def base_getinput(data,base=8,budget=32,batchsize=5,unet_channels=1,datatype=torch.float,mode='rand',return_mask=False):
+def base_getinput(data,base=8,budget=32,batchsize=5,unet_channels=1,fix_mask=None,datatype=torch.float,mode='rand',return_mask=False):
     '''
     assume the input data has the dimension [img,heg,wid]
     returned data in the format [NCHW]
@@ -714,7 +718,11 @@ def base_getinput(data,base=8,budget=32,batchsize=5,unet_channels=1,datatype=tor
     num_pts,heg,wid = data.shape[0],data.shape[1],data.shape[2]
     batchind  = 0
     batchnums = int(np.ceil(num_pts/batchsize))        
-    masks = torch.zeros(num_pts,heg)
+    if fix_mask is None:
+        masks = torch.zeros(num_pts,heg)
+    else:
+        masks  = fix_mask
+        lfmask = fix_mask[0,:]
         
     while batchind < batchnums:
         batch  = torch.arange(batchind*batchsize,min((batchind+1)*batchsize,num_pts))
@@ -728,7 +736,8 @@ def base_getinput(data,base=8,budget=32,batchsize=5,unet_channels=1,datatype=tor
         batchdata      = torch.zeros_like(batchdata_full)
         batchdata[:,lfmask==1,:] = batchdata_full[:,lfmask==1,:]
         y_lf[batch,:,:] = batchdata
-        masks[batch,:]  = lfmask
+        if fix_mask is None:
+            masks[batch,:]  = lfmask
         batchind += 1
     
     if unet_channels == 2:                
@@ -925,7 +934,7 @@ def mnet_eval(testdata,mnet,model,base,budget,batchsize=25,datatype=torch.float,
 
 # baseline eval
 def baseline_eval(testdata,model,base,budget,batchsize=25,mode='rand',energy_vec=None,
-                  datatype=torch.float,device=torch.device('cpu')):
+                  datatype=torch.float,device=torch.device('cpu'),fix_mask=None):
     
     model.to(device)
     for ind in range(testdata.shape[0]):
@@ -935,13 +944,13 @@ def baseline_eval(testdata,model,base,budget,batchsize=25,mode='rand',energy_vec
     if model.__class__.__name__ != 'MoDL':
         if mode != 'prob':
             test_in = base_getinput(testdata,base=base,budget=budget,batchsize=batchsize,
-                                    unet_channels=model.in_chans,datatype=torch.float,mode=mode)
+                                    unet_channels=model.in_chans,datatype=torch.float,mode=mode,fix_mask=fix_mask)
         else:
             test_in = energydist_getinput(testdata,base=base,budget=budget,
-                                          unet_channels=model.in_chans,datatype=datatype,energy_vec=energy_vec,return_dist=False)
+                                          unet_channels=model.in_chans,datatype=datatype,energy_vec=energy_vec,return_dist=False,fix_mask=fix_mask)
     else:
         test_in, masks = base_getinput(testdata,base=base,budget=budget,batchsize=batchsize,
-                                    unet_channels=model.model.in_chans,return_mask=True,datatype=torch.float,mode=mode)
+                                    unet_channels=model.model.in_chans,return_mask=True,datatype=torch.float,mode=mode,fix_mask=fix_mask)
     labels = testdata.to(datatype)
     del testdata  
     l1err = torch.zeros(test_in.shape[0])
