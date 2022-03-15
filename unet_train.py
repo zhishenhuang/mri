@@ -19,9 +19,9 @@ from mnet.mnet_v2 import MNet
 import copy
 dir_checkpoint = '/mnt/shared_a/checkpoints/leo/recon/'
 
-def prepare_data(mode='mnet',mnet=None, base=8, budget=32,batchsize=5,unet_inchans=2,datatype=torch.float,device=torch.device('cpu')):
+def prepare_data(mode='mnet',mnet=None, fix_mask=None,base=8, budget=32,batchsize=5,unet_inchans=2,datatype=torch.float,device=torch.device('cpu')):
     infos = f'base{base}_budget{budget}_'
-    if (mode == 'mnet') or (mode=='rand') or (mode == 'equidist') or (mode == 'lfonly') or (mode == 'prob'):
+    if (mode == 'mnet') or (mode=='rand') or (mode == 'equidist') or (mode == 'lfonly') or (mode == 'prob') or (mode=='fix'):
         train_full = torch.tensor(np.load('/mnt/shared_a/fastMRI/knee_singlecoil_train.npz')['data'],dtype=datatype)
         val_full   = torch.tensor(np.load('/mnt/shared_a/fastMRI/knee_singlecoil_val.npz')['data'],  dtype=datatype)
         for ind in range(train_full.shape[0]):
@@ -48,11 +48,11 @@ def prepare_data(mode='mnet',mnet=None, base=8, budget=32,batchsize=5,unet_incha
         acceleration_fold = str(int(train_in.shape[2]/(base+budget)))
         print(f'\n   Data successfully prepared with the provided MNet for acceleration fold {acceleration_fold}!\n')
         
-    if (mode=='rand') or (mode == 'equidist') or (mode == 'lfonly'):
+    if (mode=='rand') or (mode == 'equidist') or (mode == 'lfonly') or (mode=='fix'):
         ## train a unet to reconstruct images from random mask
         
-        train_in = base_getinput(train_full,base=base,budget=budget,batchsize=batchsize,unet_channels=unet_inchans,datatype=datatype,mode=mode)
-        val_in   = base_getinput(val_full,base=base,budget=budget,batchsize=batchsize,unet_channels=unet_inchans,datatype=datatype,mode=mode)
+        train_in = base_getinput(train_full,base=base,budget=budget,batchsize=batchsize,unet_channels=unet_inchans,datatype=datatype,mode=mode,fix_mask=fix_mask)
+        val_in   = base_getinput(val_full,base=base,budget=budget,batchsize=batchsize,unet_channels=unet_inchans,datatype=datatype,mode=mode,fix_mask=fix_mask)
 
         del train_full, val_full         
         print(f'data preparation mode is {mode}')
@@ -360,6 +360,13 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     
+    
+    #################################
+    # Mar 14, try fixed Loupe mask
+    maskfile = '/mnt/shared_a/checkpoints/leo/mri/loupe_mask_8fold.pt'
+    fix_mask = torch.load(maskfile)['mask']
+    #################################
+    
     if args.skip == 'False':
         args.skip = False
     elif args.skip == 'True':
@@ -395,7 +402,7 @@ if __name__ == '__main__':
     
     device = torch.device('cuda:0') if args.ngpu > 0 else torch.device('cpu')
     
-    train_in, train_label, val_in, val_label = prepare_data(mode=args.mode,mnet=mnet, base=args.base_freq, budget=args.budget,batchsize=args.batchsize,unet_inchans=unet.in_chans,datatype=torch.float,device=device)
+    train_in, train_label, val_in, val_label = prepare_data(mode=args.mode,mnet=mnet, base=args.base_freq, budget=args.budget,batchsize=args.batchsize,unet_inchans=unet.in_chans,datatype=torch.float,device=device,fix_mask=fix_mask)
     del mnet
     infos = f'base{args.base_freq}_budget{args.budget}'
     trainer = unet_trainer(unet,
